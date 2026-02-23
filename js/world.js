@@ -31,15 +31,19 @@ export const LEVELS = [
             { type: 'sd', x: 12, z: 10 },
             { type: 'ian_bert', x: 8, z: 3, variant: 0 },
             { type: 'ian_bert', x: 10, z: 3, variant: 1 },
-            { type: 'lars_werner', x: 2, z: 14 },
+            { type: 'lars_werner', x: 2, z: 2 },
             { type: 'nmr_elite', x: 14, z: 13 },
-            { type: 'm_retro', x: 1, z: 8 }
+            { type: 'm_retro', x: 1, z: 5 }
         ],
         propData: [
             { type: 'bin', x: 7, z: 14 },
             { type: 'bin', x: 1, z: 1 },
             { type: 'chair', x: 4, z: 4 },
             { type: 'chair', x: 10, z: 13 }
+        ],
+        vendingMachineData: [
+            { x: 14, z: 14 },
+            { x: 1, z: 10 }
         ],
         pickupData: [
             { type: 'health', x: 6, z: 8 },
@@ -53,12 +57,6 @@ export const LEVELS = [
             { x: 7, z: 7 },
             { x: 13, z: 11 }
         ],
-        propData: [
-            { type: 'bin', x: 7, z: 14 },
-            { type: 'bin', x: 1, z: 1 },
-            { type: 'chair', x: 4, z: 4 },
-            { type: 'chair', x: 10, z: 13 }
-        ]
     },
     {
         name: "Propagandafabriken",
@@ -136,6 +134,10 @@ export const LEVELS = [
             { type: 'ulf', x: 14, z: 15 },
             { type: 'sd', x: 5, z: 2 },
             { type: 'sd', x: 16, z: 9 }
+        ],
+        vendingMachineData: [
+            { x: 2, z: 2 },
+            { x: 19, z: 19 }
         ],
         pickupData: [
             { type: 'shotgun', x: 3, z: 12 },
@@ -451,6 +453,23 @@ export function buildLevel(levelIndex, scene) {
         });
     }
 
+    // Vending Machines
+    const vendingMachines = [];
+    if (lv.vendingMachineData) {
+        lv.vendingMachineData.forEach(vd => {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.5, 0.8), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+            body.position.y = 1.25; group.add(body);
+            const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.6), new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 0.5 }));
+            screen.position.set(0, 1.8, 0.41); group.add(screen);
+            const slot = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.4, 0.1), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+            slot.position.set(0, 0.4, 0.36); group.add(slot);
+            group.position.set(vd.x * 2, 0, vd.z * 2);
+            scene.add(group);
+            vendingMachines.push({ mesh: group, hp: 30, active: true, screen });
+        });
+    }
+
     // Floor and Ceiling
     const floorGeo = new THREE.PlaneGeometry(100, 100);
     const floorMat = new THREE.MeshStandardMaterial({ 
@@ -471,5 +490,5 @@ export function buildLevel(levelIndex, scene) {
     ceil.position.y = 4;
     scene.add(ceil);
 
-    return { walls, doors, enemies, exits, playerStart, pickups, barrels, props };
+    return { walls, doors, enemies, exits, playerStart, pickups, barrels, props, vendingMachines };
 }

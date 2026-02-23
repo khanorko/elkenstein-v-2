@@ -514,38 +514,46 @@ function checkCollision(pos, radius) {
     return false;
 }
 
+// Pre-allocated vectors for enemy AI (zero GC pressure)
+var _eVec = new THREE.Vector3();
+var _eVec2 = new THREE.Vector3();
+var _eVec3 = new THREE.Vector3();
+var _eLook = new THREE.Vector3();
+var _ePos = new THREE.Vector3();
+
 function pickPatrolTarget(e) {
     for (var i = 0; i < 10; i++) {
         var tx = e.patrolOriginX + (Math.random()-0.5)*12, tz = e.patrolOriginZ + (Math.random()-0.5)*12;
-        if (!checkCollision(new THREE.Vector3(tx, e.mesh.position.y, tz), 0.5)) { e.patrolTargetX = tx; e.patrolTargetZ = tz; return; }
+        _ePos.set(tx, e.mesh.position.y, tz);
+        if (!checkCollision(_ePos, 0.5)) { e.patrolTargetX = tx; e.patrolTargetZ = tz; return; }
     }
     e.patrolTargetX = e.patrolOriginX; e.patrolTargetZ = e.patrolOriginZ;
 }
 
 function updateEnemy(e, dt, time) {
-    e.mesh.lookAt(new THREE.Vector3(camera.position.x, e.mesh.position.y, camera.position.z));
+    _eLook.set(camera.position.x, e.mesh.position.y, camera.position.z);
+    e.mesh.lookAt(_eLook);
     var dist = e.mesh.position.distanceTo(camera.position);
     if (e.alertCooldown > 0) e.alertCooldown -= dt;
 
     if (e.state === 'debate') { e.stateTimer -= dt; if (e.stateTimer <= 0) e.state = 'chase'; return; }
 
-    // Boss-specific AI
     var isBoss = e.type === 'jimmie' || e.type === 'ebba' || e.type === 'ulf' || e.type === 'lars_werner';
 
-    // Ulf: Dash attack (fast lunge toward player)
+    // Ulf: Dash attack
     if (e.type === 'ulf' && e.state === 'chase' && dist < 10 && dist > 3) {
         if (!e.dashCooldown) e.dashCooldown = 0;
         e.dashCooldown -= dt;
         if (e.dashCooldown <= 0) {
-            var dashDir = new THREE.Vector3().subVectors(camera.position, e.mesh.position).normalize().multiplyScalar(12 * dt);
-            dashDir.y = 0;
-            var dashPos = e.mesh.position.clone().add(dashDir);
-            if (!checkCollision(dashPos, 0.5)) e.mesh.position.copy(dashPos);
+            _eVec.subVectors(camera.position, e.mesh.position).normalize().multiplyScalar(12 * dt);
+            _eVec.y = 0;
+            _ePos.copy(e.mesh.position).add(_eVec);
+            if (!checkCollision(_ePos, 0.5)) e.mesh.position.copy(_ePos);
             e.dashCooldown = 2 + Math.random() * 2;
             if (Math.random() > 0.7) spawnSlogan(e.mesh.position, 'ulf');
         }
     }
-    // Ulf: Duck (crouch, harder to hit)
+    // Ulf: Duck
     if (e.type === 'ulf' && e.state === 'chase') {
         if (!e.duckTimer) e.duckTimer = 0;
         e.duckTimer -= dt;
@@ -556,22 +564,19 @@ function updateEnemy(e, dt, time) {
         }
     }
 
-    // Ebba: Falukorv-spin (circular strafe + area damage)
+    // Ebba: Falukorv-spin
     if (e.type === 'ebba' && e.state === 'chase' && dist < 5) {
         var spinAngle = time * 4;
-        var spinRadius = 3;
-        var spinX = camera.position.x + Math.cos(spinAngle) * spinRadius;
-        var spinZ = camera.position.z + Math.sin(spinAngle) * spinRadius;
-        var spinTarget = new THREE.Vector3(spinX, e.mesh.position.y, spinZ);
-        var spinDir = new THREE.Vector3().subVectors(spinTarget, e.mesh.position).normalize().multiplyScalar(5 * dt);
-        spinDir.y = 0;
-        var spinPos = e.mesh.position.clone().add(spinDir);
-        if (!checkCollision(spinPos, 0.5)) e.mesh.position.copy(spinPos);
+        _eVec.set(camera.position.x + Math.cos(spinAngle) * 3, e.mesh.position.y, camera.position.z + Math.sin(spinAngle) * 3);
+        _eVec2.subVectors(_eVec, e.mesh.position).normalize().multiplyScalar(5 * dt);
+        _eVec2.y = 0;
+        _ePos.copy(e.mesh.position).add(_eVec2);
+        if (!checkCollision(_ePos, 0.5)) e.mesh.position.copy(_ePos);
         e.mesh.rotation.y += 8 * dt;
         if (dist < 2.5) {
             var rawDmg = 15 * dt;
             if (state.armor > 0) { var abs = Math.min(state.armor, rawDmg * 0.7); state.armor -= abs; rawDmg -= abs; }
-            state.health -= rawDmg; updateUI();
+            state.health -= rawDmg;
             if (Math.random() > 0.95) spawnSlogan(e.mesh.position, 'ebba');
             if (state.health <= 0 && !state.dead) playerDied();
         }
@@ -584,19 +589,18 @@ function updateEnemy(e, dt, time) {
             state.health = Math.min(100, state.health + 5);
             spawnSlogan(e.mesh.position, 'debate');
             showMessage('OOPS!', 'Lars Werner helade dig av misstag!');
-            playSound('pickup'); updateUI();
+            playSound('pickup');
         }
     }
 
-    // Pressekreterare: Shield - only takes damage from behind (handled in doShoot)
     // Opinionsbildare: Summon reinforcements
     if (e.type === 'opinionsbildare' && e.state === 'chase' && dist < 10) {
         if (!e.summonCooldown) e.summonCooldown = 0;
         e.summonCooldown -= dt;
         if (e.summonCooldown <= 0 && enemies.length < 20) {
             e.summonCooldown = 8;
-            var spawnPos = e.mesh.position.clone().add(new THREE.Vector3((Math.random()-0.5)*4, 0, (Math.random()-0.5)*4));
-            if (!checkCollision(spawnPos, 0.5)) {
+            _ePos.copy(e.mesh.position); _ePos.x += (Math.random()-0.5)*4; _ePos.z += (Math.random()-0.5)*4;
+            if (!checkCollision(_ePos, 0.5)) {
                 var types = ['sd', 'jarnror', 'bss_retro'];
                 var st = types[Math.floor(Math.random() * types.length)];
                 var sv = Math.floor(Math.random() * 10);
@@ -604,23 +608,23 @@ function updateEnemy(e, dt, time) {
                 var smat = new THREE.MeshStandardMaterial({ map: colorMap, normalMap: normalMap, normalScale: new THREE.Vector2(1,1), transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
                 var sgeom = new THREE.PlaneGeometry(3, 3);
                 var smesh = new THREE.Mesh(sgeom, smat);
-                smesh.position.copy(spawnPos); smesh.castShadow = true; smesh.receiveShadow = true;
+                smesh.position.copy(_ePos); smesh.castShadow = true; smesh.receiveShadow = true;
                 scene.add(smesh);
                 enemies.push({ mesh: smesh, type: st, hp: 30, variant: sv, state: 'chase', stateTimer: 0,
-                    patrolOriginX: spawnPos.x, patrolOriginZ: spawnPos.z, patrolTargetX: spawnPos.x, patrolTargetZ: spawnPos.z,
+                    patrolOriginX: _ePos.x, patrolOriginZ: _ePos.z, patrolTargetX: _ePos.x, patrolTargetZ: _ePos.z,
                     patrolPause: 0, footstepTimer: 0, alertCooldown: 0 });
                 playSound('enemyAlert'); showMessage('FÖRSTÄRKNING!', 'Opinionsbildaren kallade på hjälp!');
             }
         }
     }
 
-    // Troll-operatör: Slows player when close
+    // Troll-operatör: Slows player
     if (e.type === 'troll' && e.state === 'chase' && dist < 8 && dist > 2) {
         if (!e.trollCooldown) e.trollCooldown = 0;
         e.trollCooldown -= dt;
         if (e.trollCooldown <= 0) {
             e.trollCooldown = 4;
-            state.speedBoost = -3; // Negative = slow
+            state.speedBoost = -3;
             spawnSlogan(e.mesh.position, 'debate');
             showMessage('LOGISK VURPA!', 'Du saktas ner...');
         }
@@ -628,10 +632,10 @@ function updateEnemy(e, dt, time) {
 
     // Cowardice: flee when low HP (non-boss)
     if (!isBoss && e.hp < 15 && e.state === 'chase' && dist < 8) {
-        var awayDir = new THREE.Vector3().subVectors(e.mesh.position, camera.position).normalize().multiplyScalar(4 * dt);
-        awayDir.y = 0;
-        var fleePos = e.mesh.position.clone().add(awayDir);
-        if (!checkCollision(fleePos, 0.5)) e.mesh.position.copy(fleePos);
+        _eVec.subVectors(e.mesh.position, camera.position).normalize().multiplyScalar(4 * dt);
+        _eVec.y = 0;
+        _ePos.copy(e.mesh.position).add(_eVec);
+        if (!checkCollision(_ePos, 0.5)) e.mesh.position.copy(_ePos);
         return;
     }
     if ((e.state === 'patrol' || e.state === 'idle') && dist < 12) {
@@ -644,37 +648,39 @@ function updateEnemy(e, dt, time) {
         var dx = e.patrolTargetX - e.mesh.position.x, dz = e.patrolTargetZ - e.mesh.position.z;
         if (Math.sqrt(dx*dx+dz*dz) < 0.5) { e.patrolPause = 1+Math.random()*2; pickPatrolTarget(e); }
         else {
-            var dir = new THREE.Vector3(dx,0,dz).normalize().multiplyScalar(1.5*dt);
-            var np = e.mesh.position.clone().add(dir);
-            if (!checkCollision(np, 0.5)) e.mesh.position.copy(np); else pickPatrolTarget(e);
+            _eVec.set(dx, 0, dz).normalize().multiplyScalar(1.5 * dt);
+            _ePos.copy(e.mesh.position).add(_eVec);
+            if (!checkCollision(_ePos, 0.5)) e.mesh.position.copy(_ePos); else pickPatrolTarget(e);
             e.footstepTimer -= dt;
             if (e.footstepTimer <= 0 && dist < 15) {
-                var fwd = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
-                playPositionalSound('enemyFootstep', camera.position, fwd, e.mesh.position);
+                _eVec2.set(0, 0, -1).applyQuaternion(camera.quaternion);
+                playPositionalSound('enemyFootstep', camera.position, _eVec2, e.mesh.position);
                 e.footstepTimer = 0.6;
             }
         }
     }
 
     if (e.state === 'chase' && dist > 1.2) {
-        // AI coordination: wait if allies are flanking from the other side
+        // AI coordination: count nearby chasing allies
         var nearbyAllies = 0;
         for (var k = 0; k < enemies.length; k++) {
             if (enemies[k] !== e && enemies[k].state === 'chase' && enemies[k].mesh.position.distanceTo(e.mesh.position) < 6) nearbyAllies++;
         }
-        // Slow down if waiting for coordination (but not if solo)
         var coordSpeed = nearbyAllies > 0 && Math.sin(time + e.patrolOriginX * 3) > 0.3 ? 2.0 : 3.5;
 
-        var tp = new THREE.Vector3().subVectors(camera.position, e.mesh.position).normalize();
-        var flank = new THREE.Vector3(-tp.z, 0, tp.x).multiplyScalar(Math.sin(time*2+e.patrolOriginX)*2);
-        var cdir = new THREE.Vector3().subVectors(camera.position.clone().add(flank), e.mesh.position).normalize().multiplyScalar(coordSpeed*dt);
-        cdir.y = 0;
-        var cnp = e.mesh.position.clone().add(cdir);
-        if (!checkCollision(cnp, 0.5)) e.mesh.position.copy(cnp);
+        _eVec.subVectors(camera.position, e.mesh.position).normalize();
+        var flankMul = Math.sin(time * 2 + e.patrolOriginX) * 2;
+        _eVec2.set(-_eVec.z * flankMul, 0, _eVec.x * flankMul);
+        // target = camera + flank offset
+        _eVec3.copy(camera.position).add(_eVec2);
+        _eVec.subVectors(_eVec3, e.mesh.position).normalize().multiplyScalar(coordSpeed * dt);
+        _eVec.y = 0;
+        _ePos.copy(e.mesh.position).add(_eVec);
+        if (!checkCollision(_ePos, 0.5)) e.mesh.position.copy(_ePos);
         e.footstepTimer -= dt;
         if (e.footstepTimer <= 0 && dist < 15) {
-            var fwd2 = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
-            playPositionalSound('enemyFootstep', camera.position, fwd2, e.mesh.position);
+            _eVec2.set(0, 0, -1).applyQuaternion(camera.quaternion);
+            playPositionalSound('enemyFootstep', camera.position, _eVec2, e.mesh.position);
             e.footstepTimer = 0.35;
         }
         for (var j = 0; j < enemies.length; j++) {
@@ -690,21 +696,20 @@ function updateEnemy(e, dt, time) {
         state.health -= rawDmg;
         if (Math.random() > 0.95) { playSound('damageHit'); showDamageDirection(e.mesh.position); }
         _dom.vig.style.boxShadow = state.health < 30 ? 'inset 0 0 100px rgba(255,0,0,0.5)' : 'inset 0 0 100px rgba(0,0,0,0.8)';
-        updateUI();
         if (Math.random() > 0.98) spawnSlogan(e.mesh.position, e.type);
         if (state.health <= 0 && !state.dead) playerDied();
     }
 }
 
 var dmgIndicatorTimers = { top: 0, right: 0, bottom: 0, left: 0 };
+var _dmgVec1 = new THREE.Vector3();
+var _dmgVec2 = new THREE.Vector3();
+var _dmgVec3 = new THREE.Vector3();
 function showDamageDirection(enemyPos) {
-    var toEnemy = new THREE.Vector3().subVectors(enemyPos, camera.position);
-    toEnemy.y = 0; toEnemy.normalize();
-    var forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-    forward.y = 0; forward.normalize();
-    var right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-    right.y = 0; right.normalize();
-    var dotFwd = forward.dot(toEnemy), dotRight = right.dot(toEnemy);
+    _dmgVec1.subVectors(enemyPos, camera.position); _dmgVec1.y = 0; _dmgVec1.normalize();
+    _dmgVec2.set(0, 0, -1).applyQuaternion(camera.quaternion); _dmgVec2.y = 0; _dmgVec2.normalize();
+    _dmgVec3.set(1, 0, 0).applyQuaternion(camera.quaternion); _dmgVec3.y = 0; _dmgVec3.normalize();
+    var dotFwd = _dmgVec2.dot(_dmgVec1), dotRight = _dmgVec3.dot(_dmgVec1);
     if (dotFwd > 0.5) dmgIndicatorTimers.top = 0.4;
     else if (dotFwd < -0.5) dmgIndicatorTimers.bottom = 0.4;
     if (dotRight > 0.5) dmgIndicatorTimers.right = 0.4;
@@ -854,18 +859,18 @@ function animate() {
         if (state.speedBoost > 0) state.speedBoost -= dt;
         else if (state.speedBoost < 0) state.speedBoost = Math.min(0, state.speedBoost + dt);
         var speed = (state.speedBoost > 0 ? 15.0 : state.speedBoost < 0 ? 5.0 : 10.0) * dt;
-        var moveDir = new THREE.Vector3();
-        if (moveState.fwd) moveDir.z -= 1;
-        if (moveState.back) moveDir.z += 1;
-        if (moveState.left) moveDir.x -= 1;
-        if (moveState.right) moveDir.x += 1;
+        _eVec.set(0, 0, 0);
+        if (moveState.fwd) _eVec.z -= 1;
+        if (moveState.back) _eVec.z += 1;
+        if (moveState.left) _eVec.x -= 1;
+        if (moveState.right) _eVec.x += 1;
 
-        if (moveDir.length() > 0) {
-            var wd = moveDir.clone().applyQuaternion(camera.quaternion); wd.y = 0; wd.normalize();
-            var nx = camera.position.clone().add(new THREE.Vector3(wd.x * speed, 0, 0));
-            if (!checkCollision(nx, 0.3)) camera.position.x = nx.x;
-            var nz = camera.position.clone().add(new THREE.Vector3(0, 0, wd.z * speed));
-            if (!checkCollision(nz, 0.3)) camera.position.z = nz.z;
+        if (_eVec.length() > 0) {
+            _eVec2.copy(_eVec).applyQuaternion(camera.quaternion); _eVec2.y = 0; _eVec2.normalize();
+            _ePos.copy(camera.position); _ePos.x += _eVec2.x * speed;
+            if (!checkCollision(_ePos, 0.3)) camera.position.x = _ePos.x;
+            _ePos.copy(camera.position); _ePos.z += _eVec2.z * speed;
+            if (!checkCollision(_ePos, 0.3)) camera.position.z = _ePos.z;
             gunGroup.position.y = Math.sin(time * 12) * 0.015; gunGroup.position.x = Math.cos(time * 6) * 0.01;
             playerFootstepTimer -= dt;
             if (playerFootstepTimer <= 0) {
@@ -947,30 +952,30 @@ function animate() {
     }
     gunGroup.position.z += (0 - gunGroup.position.z) * 15 * dt; gunGroup.rotation.x += (0 - gunGroup.rotation.x) * 15 * dt;
     // Prop Physics
-    props.forEach(p => {
+    for (var _pi = 0; _pi < props.length; _pi++) {
+        var p = props[_pi];
         if (p.velocity.length() > 0.01) {
-            const nextPos = p.mesh.position.clone().add(p.velocity.clone().multiplyScalar(60 * dt));
-            if (!checkCollision(nextPos, 0.4)) {
-                p.mesh.position.copy(nextPos);
+            _pVel.copy(p.velocity).multiplyScalar(60 * dt);
+            _ePos.copy(p.mesh.position).add(_pVel);
+            if (!checkCollision(_ePos, 0.4)) {
+                p.mesh.position.copy(_ePos);
                 p.mesh.rotation.x += p.rotVelocity.x * dt * 60;
                 p.mesh.rotation.y += p.rotVelocity.y * dt * 60;
                 p.mesh.rotation.z += p.rotVelocity.z * dt * 60;
             } else {
-                p.velocity.multiplyScalar(-0.5); // Bounce
+                p.velocity.multiplyScalar(-0.5);
             }
-            p.velocity.multiplyScalar(0.9); // Friction
+            p.velocity.multiplyScalar(0.9);
             p.rotVelocity.multiplyScalar(0.9);
         }
-
-        // Kick logic
-        const dist = p.mesh.position.distanceTo(camera.position);
-        if (dist < 1.2) {
-            const kickDir = new THREE.Vector3().subVectors(p.mesh.position, camera.position).normalize();
-            kickDir.y = 0;
-            p.velocity.add(kickDir.multiplyScalar(0.1));
+        var pdist = p.mesh.position.distanceTo(camera.position);
+        if (pdist < 1.2) {
+            _eVec.subVectors(p.mesh.position, camera.position).normalize();
+            _eVec.y = 0;
+            p.velocity.add(_eVec.multiplyScalar(0.1));
             p.rotVelocity.set(Math.random(), Math.random(), Math.random()).multiplyScalar(0.1);
         }
-    });
+    }
 
     for (var _ei = 0; _ei < enemies.length; _ei++) {
         var _e = enemies[_ei];
