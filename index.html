@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <title>ELKENSTEIN V2 - The Awakening</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="vignette"></div>
+
+    <div id="compass">
+        <div id="compass-strip">
+            <span>N</span><span>·</span><span>E</span><span>·</span><span>S</span><span>·</span><span>W</span><span>·</span>
+            <span>N</span><span>·</span><span>E</span><span>·</span><span>S</span><span>·</span><span>W</span><span>·</span>
+        </div>
+    </div>
+
+    <div id="overlay">
+        <div class="title-card">
+            <h1>ELKENSTEIN V2</h1>
+            <div class="subtitle">RETRO REVOLUTION | POLITICAL CHAOS</div>
+        </div>
+        
+        <div class="btn-container">
+            <button id="startBtn">START ENGINE</button>
+        </div>
+
+        <div class="controls-hint">
+            WASD = Rörelse &nbsp;|&nbsp; MUS = Sikta &nbsp;|&nbsp; KLICK = Skjut &nbsp;|&nbsp; V = Melee &nbsp;|&nbsp; SPACE/E = Dörrar &nbsp;|&nbsp; 1-3 = Vapen
+        </div>
+    </div>
+
+    <div id="ui">
+        <div id="health-container">
+            <div id="health-bar"></div>
+            <div id="health-text">100%</div>
+        </div>
+        <div id="ammo">AMMO: 50</div>
+        <div id="armor-display" style="font-size:18px; color:#4488ff; font-weight:bold; display:none">ARMOR: 0</div>
+    </div>
+    <div id="score-display" style="position:absolute; top:60px; right:20px; color:#fc0; font-size:20px; font-weight:bold; font-family:'Courier New',monospace; text-shadow:2px 2px #000; pointer-events:none">
+        <div id="score-text">0</div>
+        <div id="combo-text" style="color:#f44; font-size:16px"></div>
+    </div>
+
+    <div id="mission-list" style="position:absolute; top:60px; left:20px; color:#fc0; font-family:'Courier New',monospace; font-size:14px; text-shadow:1px 1px #000; pointer-events:none; opacity:0.8">
+        <div style="font-size:16px; font-weight:bold; margin-bottom:5px; color:#fff">UPPDRAG:</div>
+        <div id="mission-text"></div>
+    </div>
+
+    <div id="minimap-container">
+        <canvas id="minimap-canvas" width="150" height="150"></canvas>
+    </div>
+
+    <div id="damage-indicator">
+        <div class="dmg-arrow" id="dmg-top"></div>
+        <div class="dmg-arrow" id="dmg-right"></div>
+        <div class="dmg-arrow" id="dmg-bottom"></div>
+        <div class="dmg-arrow" id="dmg-left"></div>
+    </div>
+
+    <div id="message"></div>
+
+    <!-- Death Screen -->
+    <div id="deathScreen" class="game-screen" style="display:none">
+        <div class="screen-title" style="color:#f00">DU DOG!</div>
+        <div class="screen-subtitle">Demokratin föll...</div>
+        <div id="deathStats" class="screen-stats"></div>
+        <button onclick="window.restartLevel()">FÖRSÖK IGEN</button>
+    </div>
+
+    <!-- Victory Screen -->
+    <div id="winScreen" class="game-screen" style="display:none">
+        <div class="screen-title" style="color:#0f0">DU RÄDDADE DEMOKRATIN!</div>
+        <div class="screen-subtitle">Sverige är fritt igen!</div>
+        <div id="winStats" class="screen-stats"></div>
+        <div class="btn-container">
+            <button onclick="window.showMenu()">HUVUDMENY</button>
+            <button onclick="window.startNewGamePlus()">NEW GAME+</button>
+        </div>
+    </div>
+
+    <!-- Level Transition Screen -->
+    <div id="levelScreen" class="game-screen" style="display:none">
+        <div id="levelTitle" class="screen-title" style="color:#fc0">NIVÅ 2</div>
+        <div id="levelSub" class="screen-subtitle"></div>
+        <div id="levelStats" class="screen-stats"></div>
+        <button onclick="window.startNextLevel()">FORTSÄTT</button>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
