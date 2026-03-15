@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { createEnemyTexture } from './assets.js';
 
 export const LEVELS = [
     {
@@ -367,13 +366,10 @@ export function buildLevel(levelIndex, scene) {
 
     lv.enemyData.forEach(ed => {
         const variant = ed.variant !== undefined ? ed.variant : Math.floor(Math.random() * 10);
-        const { colorMap, normalMap } = createEnemyTexture(ed.type, 'idle', variant);
-        
-        const mat = new THREE.MeshStandardMaterial({ 
-            map: colorMap, 
-            normalMap: normalMap,
-            normalScale: new THREE.Vector2(1.0, 1.0),
-            transparent: true, 
+        // Placeholder material — real texture applied deferred in main.js
+        const mat = new THREE.MeshStandardMaterial({
+            color: 0x888888,
+            transparent: true,
             alphaTest: 0.5,
             side: THREE.DoubleSide
         });

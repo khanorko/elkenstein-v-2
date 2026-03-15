@@ -80,21 +80,77 @@ function loadLevel(index) {
     scene.fog = new THREE.FogExp2(LEVELS[index].sky, 0.03);
     scene.background = new THREE.Color(LEVELS[index].sky);
 
-    const decoTypes = ['swedish', 'nydemokrati', 'ultima_thule', 'valstuga', 'demokrati', 'foliehatt', 'jarnror_prop'];
-    walls.forEach(wall => {
-        if (Math.random() > 0.7) {
-            const type = decoTypes[Math.floor(Math.random() * decoTypes.length)];
-            const { colorMap, normalMap } = createWallDecoration(type);
-            wall.material = new THREE.MeshStandardMaterial({ map: colorMap, normalMap, normalScale: new THREE.Vector2(1.5, 1.5), roughness: 0.6, metalness: 0.1 });
-        }
-    });
     rebuildCollisionCache();
-    // Set reverb based on level
-    setReverb(index >= 3 ? 'large' : index >= 1 ? 'medium' : 'small');
     // Update mission list
     var missionEl = document.getElementById('mission-text');
     if (missionEl) missionEl.textContent = levelMissions[index] || '- Besegra alla fiender';
     showMessage(LEVELS[index].name, LEVELS[index].subtitle);
+
+    // Collect deferred texture tasks: wall decorations + enemy textures
+    const decoTypes = ['swedish', 'nydemokrati', 'ultima_thule', 'valstuga', 'demokrati', 'foliehatt', 'jarnror_prop'];
+    const deferredTasks = [];
+    walls.forEach(function(wall) {
+        if (Math.random() > 0.7) {
+            const type = decoTypes[Math.floor(Math.random() * decoTypes.length)];
+            deferredTasks.push({ kind: 'wall', wall: wall, decoType: type });
+        }
+    });
+    enemies.forEach(function(e) {
+        deferredTasks.push({ kind: 'enemy', enemy: e });
+    });
+
+    // Show loading bar
+    var loadBar = document.getElementById('loading-bar');
+    if (!loadBar) {
+        var loadEl = document.createElement('div');
+        loadEl.id = 'loading-overlay';
+        loadEl.style.cssText = 'position:fixed;bottom:0;left:0;width:100%;padding:6px 0;background:rgba(0,0,0,0.7);color:#fc0;font-family:"Courier New",monospace;font-size:14px;text-align:center;z-index:999;pointer-events:none';
+        loadBar = document.createElement('div');
+        loadBar.id = 'loading-bar';
+        loadEl.appendChild(loadBar);
+        document.body.appendChild(loadEl);
+    }
+    var loadOverlay = document.getElementById('loading-overlay');
+    if (loadOverlay) loadOverlay.style.display = 'block';
+
+    var tasksDone = 0;
+    var total = deferredTasks.length;
+
+    function processBatch() {
+        var batchSize = 2;
+        for (var b = 0; b < batchSize && tasksDone < total; b++, tasksDone++) {
+            var task = deferredTasks[tasksDone];
+            if (task.kind === 'wall') {
+                var wd = createWallDecoration(task.decoType);
+                task.wall.material = new THREE.MeshStandardMaterial({ map: wd.colorMap, normalMap: wd.normalMap, normalScale: new THREE.Vector2(1.5, 1.5), roughness: 0.6, metalness: 0.1 });
+            } else if (task.kind === 'enemy') {
+                var et = createEnemyTexture(task.enemy.type, 'idle', task.enemy.variant);
+                task.enemy.mesh.material.map = et.colorMap;
+                task.enemy.mesh.material.normalMap = et.normalMap;
+                task.enemy.mesh.material.normalScale = new THREE.Vector2(1.0, 1.0);
+                task.enemy.mesh.material.color.setHex(0xffffff);
+                task.enemy.mesh.material.needsUpdate = true;
+            }
+        }
+        if (loadBar) loadBar.textContent = 'LADDAR ' + Math.round(tasksDone / total * 100) + '%';
+        if (tasksDone < total) {
+            requestAnimationFrame(processBatch);
+        } else {
+            if (loadOverlay) loadOverlay.style.display = 'none';
+            // Defer reverb until after textures are loaded (ConvolverNode is heavy)
+            setTimeout(function() {
+                setReverb(index >= 3 ? 'large' : index >= 1 ? 'medium' : 'small');
+            }, 100);
+        }
+    }
+    if (total > 0) {
+        requestAnimationFrame(processBatch);
+    } else {
+        if (loadOverlay) loadOverlay.style.display = 'none';
+        setTimeout(function() {
+            setReverb(index >= 3 ? 'large' : index >= 1 ? 'medium' : 'small');
+        }, 100);
+    }
 }
 
 function showMessage(title, sub) {
