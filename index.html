@@ -89,12 +89,30 @@
         </div>
     </div>
 
-    <!-- Level Transition Screen -->
+    <!-- Level Transition Screen (score card) -->
     <div id="levelScreen" class="game-screen" style="display:none">
         <div id="levelTitle" class="screen-title" style="color:#fc0">NIVÅ 2</div>
         <div id="levelSub" class="screen-subtitle"></div>
         <div id="levelStats" class="screen-stats"></div>
-        <button onclick="window.startNextLevel()">FORTSÄTT</button>
+        <div id="levelObjectives" style="margin:16px auto;text-align:left;max-width:380px;font-family:'Courier New',monospace;font-size:15px;color:#ccc;line-height:2"></div>
+        <div id="levelGrade" style="font-size:60px;font-family:'Courier New',monospace;font-weight:bold;margin:8px 0;text-shadow:0 0 20px currentColor"></div>
+        <button onclick="window.showMissionBriefing()">NÄSTA UPPDRAG</button>
+    </div>
+
+    <!-- Mission Briefing Screen -->
+    <div id="briefingScreen" class="game-screen" style="display:none;background:rgba(0,0,0,0.97)">
+        <div style="font-family:'Courier New',monospace;color:#0f0;max-width:500px;margin:0 auto;text-align:left;border:2px solid #0f0;padding:24px 32px;box-shadow:0 0 40px #0f0">
+            <div style="color:#fc0;font-size:12px;letter-spacing:4px;margin-bottom:4px">UPPDRAGSBRIEFING // SÄKERHETSGRAD: ÖVS-HEMLIG</div>
+            <div id="briefingLevel" style="font-size:22px;font-weight:bold;color:#0f0;margin-bottom:16px;border-bottom:1px solid #0f0;padding-bottom:8px"></div>
+            <div style="color:#888;font-size:12px;margin-bottom:12px">PRIMÄRT MÅL:</div>
+            <div id="briefingPrimary" style="color:#fff;font-size:15px;margin-bottom:16px;padding-left:12px"></div>
+            <div style="color:#888;font-size:12px;margin-bottom:12px">SEKUNDÄRA MÅL (BONUS):</div>
+            <div id="briefingSecondary" style="color:#adf;font-size:14px;padding-left:12px;line-height:1.9"></div>
+            <div style="margin-top:20px;color:#888;font-size:12px" id="briefingParTime"></div>
+        </div>
+        <div style="margin-top:28px">
+            <button onclick="window.startAfterBriefing()">STARTA UPPDRAG</button>
+        </div>
     </div>
 
     <script type="module" src="js/main.js"></script>

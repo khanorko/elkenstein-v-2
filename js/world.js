@@ -4,6 +4,8 @@ export const LEVELS = [
     {
         name: "Riksdagshuset",
         subtitle: "Rensa korridorerna",
+        parTime: 120,
+        bossTypes: [],
         sky: 0x1a1a2e,
         floor: 0x222222,
         map: [
@@ -60,6 +62,8 @@ export const LEVELS = [
     {
         name: "Propagandafabriken",
         subtitle: "Möt Ebba Busch",
+        parTime: 100,
+        bossTypes: ['ebba'],
         sky: 0x221a1a,
         floor: 0x111111,
         map: [
@@ -107,6 +111,8 @@ export const LEVELS = [
     {
         name: "Slutdebatten",
         subtitle: "Besegra Jimmie Åkesson",
+        parTime: 90,
+        bossTypes: ['jimmie', 'ulf'],
         sky: 0x000033,
         floor: 0x444400,
         map: [
@@ -157,6 +163,8 @@ export const LEVELS = [
     {
         name: "Det Stora Biblioteket",
         subtitle: "Kunskap är makt",
+        parTime: 130,
+        bossTypes: ['lars_werner'],
         sky: 0x1a1a0a,
         floor: 0x553322,
         map: [
@@ -208,6 +216,8 @@ export const LEVELS = [
     {
         name: "Rosenbads Serverhall",
         subtitle: "Digitalt kaos",
+        parTime: 130,
+        bossTypes: [],
         sky: 0x001122,
         floor: 0x222233,
         map: [
@@ -258,6 +268,8 @@ export const LEVELS = [
     {
         name: "Slottsträdgården",
         subtitle: "Den sista striden",
+        parTime: 180,
+        bossTypes: ['jimmie', 'ebba', 'ulf'],
         sky: 0x112211,
         floor: 0x336633,
         map: [

@@ -24,7 +24,13 @@ const state = {
     weapon: 1, inventory: [1],
     kills: 0, shotsFired: 0, shotsHit: 0, gameTime: 0, playing: false,
     armor: 0, speedBoost: 0, combo: 0, comboTimer: 0, score: 0,
-    ammoType: 0, ngPlus: false
+    ammoType: 0, ngPlus: false,
+    // Mission tracking
+    levelStartEnemyCount: 0,
+    levelKills: 0,
+    levelTime: 0,
+    missionBossNoDamage: true,
+    secretFound: false
 };
 
 const CRTShader = {
@@ -65,9 +71,15 @@ function loadLevel(index) {
 
     const data = buildLevel(index, scene);
     walls = data.walls; doors = data.doors; enemies = data.enemies; exits = data.exits;
-    pickups = data.pickups || []; barrels = data.barrels || []; props = data.props || []; 
+    pickups = data.pickups || []; barrels = data.barrels || []; props = data.props || [];
     vendingMachines = data.vendingMachines || [];
     camera.position.copy(data.playerStart);
+    // Reset mission tracking for new level
+    state.levelStartEnemyCount = enemies.length;
+    state.levelKills = 0;
+    state.levelTime = 0;
+    state.missionBossNoDamage = true;
+    state.secretFound = false;
     // New Game Plus: double enemy HP
     if (state.ngPlus) enemies.forEach(function(e) { e.hp *= 2; });
 
@@ -176,9 +188,93 @@ var deathQuotes = [
 
 function getStatsHTML() {
     var acc = state.shotsFired > 0 ? Math.round((state.shotsHit / state.shotsFired) * 100) : 0;
-    var m = Math.floor(state.gameTime / 60), s = Math.floor(state.gameTime % 60);
-    return 'FIENDER BESEGRADE: ' + state.kills + '<br>TRÄFFSÄKERHET: ' + acc + '%<br>TID: ' + m + ':' + (s < 10 ? '0' + s : s) + '<br>DEMOKRATIPOÄNG: ' + state.score;
+    var lt = state.levelTime || 0;
+    var lm = Math.floor(lt / 60), ls = Math.floor(lt % 60);
+    return 'FIENDER BESEGRADE: ' + state.levelKills + '/' + state.levelStartEnemyCount + '<br>TRÄFFSÄKERHET: ' + acc + '%<br>NIVÅ TID: ' + lm + ':' + (ls < 10 ? '0' + ls : ls) + '<br>DEMOKRATIPOÄNG: ' + state.score;
 }
+
+function evaluateMissionObjectives(levelIndex) {
+    var lv = LEVELS[levelIndex];
+    var parTime = lv.parTime || 120;
+    var bossTypes = lv.bossTypes || [];
+    var objs = [];
+    // Primary: always done if we got here
+    objs.push({ label: 'Nå utgången', done: true, primary: true });
+    // All enemies killed
+    objs.push({ label: 'Eliminera alla fiender (' + state.levelStartEnemyCount + ')', done: state.levelKills >= state.levelStartEnemyCount });
+    // Secret found
+    objs.push({ label: 'Hitta det hemliga föremålet', done: state.secretFound });
+    // Par time
+    var m = Math.floor(parTime / 60), s = parTime % 60;
+    var parStr = m > 0 ? m + 'm ' + s + 's' : s + 's';
+    objs.push({ label: 'Klart under ' + parStr + ' (par)', done: state.levelTime <= parTime });
+    // No boss damage (only if level has bosses)
+    if (bossTypes.length > 0) {
+        var bossNames = bossTypes.map(function(t) {
+            return t === 'jimmie' ? 'Jimmie' : t === 'ebba' ? 'Ebba' : t === 'ulf' ? 'Ulf' : t === 'lars_werner' ? 'Lars Werner' : t;
+        }).join('/');
+        objs.push({ label: 'Inga träffar från ' + bossNames, done: state.missionBossNoDamage });
+    }
+    return objs;
+}
+
+function calculateGrade(objs) {
+    var done = objs.filter(function(o) { return o.done; }).length;
+    var total = objs.length;
+    if (done === total) return { grade: 'S', color: '#ff0' };
+    if (done >= total - 1) return { grade: 'A', color: '#0f0' };
+    if (done >= total - 2) return { grade: 'B', color: '#0cf' };
+    if (done >= total - 3) return { grade: 'C', color: '#f80' };
+    return { grade: 'D', color: '#f44' };
+}
+
+function buildObjectivesHTML(objs) {
+    return objs.map(function(o) {
+        var icon = o.done ? '<span style="color:#0f0">✓</span>' : '<span style="color:#f44">✗</span>';
+        var style = o.primary ? 'color:#fc0;font-weight:bold' : (o.done ? 'color:#ccc' : 'color:#666');
+        return '<div style="' + style + '">' + icon + ' ' + o.label + '</div>';
+    }).join('');
+}
+
+function getBriefingSecondaryHTML(levelIndex) {
+    var lv = LEVELS[levelIndex];
+    var bossTypes = lv.bossTypes || [];
+    var lines = [];
+    lines.push('► Eliminera alla fiender');
+    lines.push('► Hitta det hemliga föremålet');
+    var parTime = lv.parTime || 120;
+    var m = Math.floor(parTime / 60), s = parTime % 60;
+    lines.push('► Klart under ' + (m > 0 ? m + 'm ' + s + 's' : s + 's') + ' (par)');
+    if (bossTypes.length > 0) {
+        var bossNames = bossTypes.map(function(t) {
+            return t === 'jimmie' ? 'Jimmie Åkesson' : t === 'ebba' ? 'Ebba Busch' : t === 'ulf' ? 'Ulf Kristersson' : t === 'lars_werner' ? 'Lars Werner' : t;
+        }).join(', ');
+        lines.push('► Inga skador från ' + bossNames);
+    }
+    return lines.join('<br>');
+}
+
+window.showMissionBriefing = function() {
+    document.getElementById('levelScreen').style.display = 'none';
+    var nextLevel = state.level;
+    if (nextLevel >= LEVELS.length) { return; }
+    var lv = LEVELS[nextLevel];
+    document.getElementById('briefingLevel').textContent = 'UPPDRAG ' + (nextLevel + 1) + ': ' + lv.name.toUpperCase();
+    document.getElementById('briefingPrimary').textContent = '► Nå utgången och ta dig vidare';
+    document.getElementById('briefingSecondary').innerHTML = getBriefingSecondaryHTML(nextLevel);
+    var parTime = lv.parTime || 120;
+    var m = Math.floor(parTime / 60), s = parTime % 60;
+    document.getElementById('briefingParTime').textContent = 'PARTID: ' + (m > 0 ? m + 'm ' + s + 's' : s + 's') + ' | FIENDER: ' + (lv.enemyData ? lv.enemyData.length : '?');
+    document.getElementById('briefingScreen').style.display = 'flex';
+};
+
+window.startAfterBriefing = function() {
+    document.getElementById('briefingScreen').style.display = 'none';
+    state.playing = true; loadLevel(state.level); controls.lock();
+    var musicMode = state.ngPlus ? 'combat' : (state.level === LEVELS.length - 1 ? 'boss' : 'exploration');
+    startMusic(musicMode); startAmbient();
+    if (state.ngPlus && state.level === 0) showMessage('NEW GAME+', 'Fiender har 2x HP!');
+};
 
 const gunLight = new THREE.PointLight(0xffaa00, 0, 15);
 const gunGroup = new THREE.Group();
@@ -237,10 +333,12 @@ document.getElementById('startBtn').addEventListener('click', () => {
     var toRemove = [];
     scene.traverse(function(obj) { if (obj.userData && obj.userData.menuObj) toRemove.push(obj); });
     toRemove.forEach(function(obj) { scene.remove(obj); });
-    controls.lock(); document.getElementById('overlay').style.display = 'none';
-    initAudio(); state.playing = true; state.kills = 0; state.shotsFired = 0; state.shotsHit = 0;
+    document.getElementById('overlay').style.display = 'none';
+    initAudio(); state.kills = 0; state.shotsFired = 0; state.shotsHit = 0;
     state.gameTime = 0; state.level = 0; state.weapon = 1; state.inventory = [1];
-    buildGunModel(1); loadLevel(state.level); startMusic('exploration'); startAmbient();
+    buildGunModel(1);
+    // Show briefing for level 0 before starting
+    window.showMissionBriefing();
 });
 
 var MAX_PARTICLES = 150;
@@ -386,7 +484,7 @@ function doShoot() {
                 if (en.hp <= 0) {
                     spawnParticles(en.mesh.position, 0xffff00, 30, 0.1); playSound('enemyDie');
                     spawnRagdoll(en.mesh);
-                    scene.remove(en.mesh); enemies.splice(enemies.indexOf(en), 1); state.kills++;
+                    scene.remove(en.mesh); enemies.splice(enemies.indexOf(en), 1); state.kills++; state.levelKills++;
                     addCombo();
                 }
             }
@@ -464,7 +562,7 @@ function explodeBarrel(barrel) {
             spawnParticles(e.mesh.position, 0xff0000, 10);
             if (e.hp <= 0) {
                 spawnParticles(e.mesh.position, 0xffff00, 30, 0.1); playSound('enemyDie');
-                scene.remove(e.mesh); enemies.splice(enemies.indexOf(e), 1); state.kills++;
+                scene.remove(e.mesh); enemies.splice(enemies.indexOf(e), 1); state.kills++; state.levelKills++;
                 addCombo();
             } else { e.state = 'chase'; }
         }
@@ -503,7 +601,7 @@ function doMelee() {
             e.hp -= 25; playSound('enemyHurt'); spawnParticles(e.mesh.position, 0xff0000, 10);
             if (e.hp <= 0) {
                 spawnParticles(e.mesh.position, 0xffff00, 30, 0.1); playSound('enemyDie');
-                scene.remove(e.mesh); enemies.splice(enemies.indexOf(e), 1); state.kills++;
+                scene.remove(e.mesh); enemies.splice(enemies.indexOf(e), 1); state.kills++; state.levelKills++;
                 addCombo();
             } else { e.state = 'chase'; }
         }
@@ -633,6 +731,7 @@ function updateEnemy(e, dt, time) {
             var rawDmg = 15 * dt;
             if (state.armor > 0) { var abs = Math.min(state.armor, rawDmg * 0.7); state.armor -= abs; rawDmg -= abs; }
             state.health -= rawDmg;
+            state.missionBossNoDamage = false;
             if (Math.random() > 0.95) spawnSlogan(e.mesh.position, 'ebba');
             if (state.health <= 0 && !state.dead) playerDied();
         }
@@ -750,6 +849,7 @@ function updateEnemy(e, dt, time) {
         var rawDmg = 10 * dt;
         if (state.armor > 0) { var absorbed = Math.min(state.armor, rawDmg * 0.7); state.armor -= absorbed; rawDmg -= absorbed; }
         state.health -= rawDmg;
+        if (isBoss) state.missionBossNoDamage = false;
         if (Math.random() > 0.95) { playSound('damageHit'); showDamageDirection(e.mesh.position); }
         _dom.vig.style.boxShadow = state.health < 30 ? 'inset 0 0 100px rgba(255,0,0,0.5)' : 'inset 0 0 100px rgba(0,0,0,0.8)';
         if (Math.random() > 0.98) spawnSlogan(e.mesh.position, e.type);
@@ -801,10 +901,9 @@ window.restartLevel = function() {
     state.dead = false; state.playing = true; loadLevel(state.level); controls.lock(); startMusic('exploration'); startAmbient();
 };
 
+// startNextLevel now routes through briefing screen (kept for any legacy calls)
 window.startNextLevel = function() {
-    document.getElementById('levelScreen').style.display = 'none';
-    state.playing = true; loadLevel(state.level); controls.lock();
-    startMusic(state.level === LEVELS.length - 1 ? 'boss' : 'exploration'); startAmbient();
+    window.showMissionBriefing();
 };
 
 window.showMenu = function() {
@@ -815,11 +914,10 @@ window.showMenu = function() {
 
 window.startNewGamePlus = function() {
     document.getElementById('winScreen').style.display = 'none';
-    state.ngPlus = true; state.level = 0; state.playing = true;
+    state.ngPlus = true; state.level = 0;
     state.health = 100; state.ammo = 50; state.armor = 50;
     state.kills = 0; state.shotsFired = 0; state.shotsHit = 0; state.gameTime = 0; state.score = 0;
-    loadLevel(0); controls.lock(); startMusic('combat'); startAmbient();
-    showMessage('NEW GAME+', 'Fiender har 2x HP!');
+    window.showMissionBriefing();
 };
 
 var playerFootstepTimer = 0;
@@ -907,6 +1005,7 @@ function animate() {
 
     if (controls.isLocked && state.playing && !state.dead) {
         state.gameTime += dt;
+        state.levelTime += dt;
         shootCooldown -= dt; meleeCooldown -= dt;
         if (state.comboTimer > 0) { state.comboTimer -= dt; if (state.comboTimer <= 0) state.combo = 0; }
         if (mouseDown && shootCooldown <= 0 && state.ammo > 0) doShoot();
@@ -937,12 +1036,22 @@ function animate() {
 
         exits.forEach(function(exit) {
             if (camera.position.distanceTo(exit.position) < 1.5) {
+                var completedLevel = state.level;
                 state.level++; playSound('levelComplete');
                 if (state.level < LEVELS.length) {
                     state.playing = false; stopMusic();
-                    document.getElementById('levelTitle').textContent = 'NIVÅ ' + (state.level + 1);
-                    document.getElementById('levelSub').textContent = LEVELS[state.level].name + ' - ' + LEVELS[state.level].subtitle;
+                    var objs = evaluateMissionObjectives(completedLevel);
+                    var gradeInfo = calculateGrade(objs);
+                    // Bonus score for objectives
+                    var bonusObjs = objs.filter(function(o) { return o.done && !o.primary; });
+                    state.score += bonusObjs.length * 500;
+                    document.getElementById('levelTitle').textContent = 'NIVÅ ' + (completedLevel + 1) + ' KLAR';
+                    document.getElementById('levelSub').textContent = LEVELS[completedLevel].name;
                     document.getElementById('levelStats').innerHTML = getStatsHTML();
+                    document.getElementById('levelObjectives').innerHTML = buildObjectivesHTML(objs);
+                    var gradeEl = document.getElementById('levelGrade');
+                    gradeEl.textContent = gradeInfo.grade;
+                    gradeEl.style.color = gradeInfo.color;
                     document.getElementById('levelScreen').style.display = 'flex'; document.exitPointerLock();
                 } else {
                     state.playing = false; stopMusic(); playSound('victory');
@@ -974,7 +1083,8 @@ function animate() {
                     case 'folkvett':
                         if (!state.inventory.includes(4)) state.inventory.push(4);
                         state.weapon = 4; buildGunModel(4);
-                        playSound('weaponPickup'); showMessage('FOLKVETT-BROSCHYR!', 'Stunnar fiender med debatt'); break;
+                        state.secretFound = true;
+                        playSound('weaponPickup'); showMessage('FOLKVETT-BROSCHYR!', 'Hemligt föremål hittat! +500p'); break;
                 }
                 updateUI();
             }
