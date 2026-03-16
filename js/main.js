@@ -446,6 +446,26 @@ function spawnSlogan(pos, type) {
 }
 
 var shootCooldown = 0;
+// Screen shake
+var _shakeTimer = 0; var _shakeIntensity = 0;
+function addScreenShake(intensity, duration) {
+    _shakeIntensity = Math.max(_shakeIntensity, intensity);
+    _shakeTimer = Math.max(_shakeTimer, duration);
+}
+// Kill feed
+var _killFeed = []; // { text, timer }
+function addKillFeed(text) {
+    _killFeed.push({ text: text, timer: 3.0 });
+    if (_killFeed.length > 5) _killFeed.shift();
+    updateKillFeedUI();
+}
+function updateKillFeedUI() {
+    var el = document.getElementById('kill-feed');
+    if (!el) return;
+    el.innerHTML = _killFeed.map(function(k) {
+        return '<div style="opacity:' + Math.min(1, k.timer) + '">' + k.text + '</div>';
+    }).join('');
+}
 // Reusable objects (avoid per-frame allocation)
 var _shootRC = new THREE.Raycaster();
 var _shootOrigin = new THREE.Vector2();
@@ -479,6 +499,9 @@ function doShoot() {
         return;
     }
     state.ammo -= wp.ammoCost; state.shotsFired++; updateUI(); playSound(wp.sound); playSound('shellCasing');
+    // Screen shake: hagelgevär mest, kulspruta lite
+    if (state.weapon === 3) addScreenShake(0.06, 0.18);
+    else if (state.weapon === 2) addScreenShake(0.01, 0.05);
     gunLight.intensity = 15; gunLight.position.copy(camera.position);
     var fl = gunGroup.getObjectByName('flash');
     if (fl) { fl.material.opacity = 1; fl.rotation.z = Math.random() * Math.PI; }
@@ -522,6 +545,7 @@ function doShoot() {
                     spawnRagdoll(en.mesh);
                     scene.remove(en.mesh); enemies.splice(enemies.indexOf(en), 1); state.kills++; state.levelKills++;
                     addCombo();
+                    addKillFeed(en.type.toUpperCase().replace('_', ' ') + ' eliminerad');
                 }
             }
         } else {
@@ -1026,6 +1050,7 @@ function updateUI() {
     _dom.ht.textContent = Math.ceil(state.health) + '%';
     _dom.hb.style.background = state.health < 30 ? '#f00' : '#0f0';
     _dom.ammo.textContent = 'AMMO: ' + state.ammo + ' | ' + _wn[state.weapon] + ' [' + _ammoTypes[state.ammoType] + ']';
+    _dom.ammo.style.color = state.ammo <= 10 ? (Math.floor(Date.now() / 300) % 2 ? '#f44' : '#fa0') : '#fc0';
     if (_dom.armor) { _dom.armor.style.display = state.armor > 0 ? 'block' : 'none'; _dom.armor.textContent = 'ARMOR: ' + Math.ceil(state.armor); }
     if (_dom.score) _dom.score.textContent = 'POÄNG: ' + state.score;
     if (_dom.combo) _dom.combo.textContent = state.combo >= 2 ? 'COMBO x' + state.combo : '';
@@ -1212,6 +1237,23 @@ function animate() {
             part.velocity.y -= 0.01 * dt;
         }
         if (part.life <= 0) { scene.remove(part.mesh); particles.splice(qi, 1); }
+    }
+    // Screen shake
+    if (_shakeTimer > 0) {
+        _shakeTimer -= dt;
+        var _si = _shakeIntensity * Math.min(1, _shakeTimer * 10);
+        camera.position.x += (Math.random() - 0.5) * _si;
+        camera.position.y += (Math.random() - 0.5) * _si * 0.5;
+        if (_shakeTimer <= 0) _shakeIntensity = 0;
+    }
+    // Kill feed timers
+    if (_killFeed.length > 0) {
+        var _kfChanged = false;
+        for (var _ki = _killFeed.length - 1; _ki >= 0; _ki--) {
+            _killFeed[_ki].timer -= dt;
+            if (_killFeed[_ki].timer <= 0) { _killFeed.splice(_ki, 1); _kfChanged = true; }
+        }
+        if (_kfChanged) updateKillFeedUI();
     }
     gunGroup.position.z += (0 - gunGroup.position.z) * 15 * dt; gunGroup.rotation.x += (0 - gunGroup.rotation.x) * 15 * dt;
     // Prop Physics
