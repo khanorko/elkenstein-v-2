@@ -341,14 +341,24 @@ document.getElementById('startBtn').addEventListener('click', () => {
     window.showMissionBriefing();
 });
 
-var MAX_PARTICLES = 150;
+var MAX_PARTICLES = 80;
+// Shared geometry + material cache to avoid GC pressure
+var _partGeomStd = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+var _partGeomLg  = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+var _partMatCache = {};
+function _getPartMat(color) {
+    if (!_partMatCache[color]) _partMatCache[color] = new THREE.MeshBasicMaterial({ color: color });
+    return _partMatCache[color];
+}
 function spawnParticles(pos, color, count, size) {
     count = count || 10; size = size || 0.05;
-    // Cap total particles
-    if (particles.length > MAX_PARTICLES) count = Math.max(1, Math.floor(count / 3));
-    var geom = new THREE.BoxGeometry(size, size, size);
+    // Hard cap — skip spawning when pool is full
+    if (particles.length >= MAX_PARTICLES) return;
+    count = Math.min(count, MAX_PARTICLES - particles.length);
+    var geom = (size <= 0.05) ? _partGeomStd : (size <= 0.08 ? _partGeomLg : new THREE.BoxGeometry(size, size, size));
+    var mat = _getPartMat(color);
     for (var i = 0; i < count; i++) {
-        var mat = new THREE.MeshBasicMaterial({ color: color }); var mesh = new THREE.Mesh(geom, mat);
+        var mesh = new THREE.Mesh(geom, mat);
         mesh.position.copy(pos);
         var vel = new THREE.Vector3((Math.random()-0.5)*0.2, (Math.random()-0.5)*0.2, (Math.random()-0.5)*0.2);
         scene.add(mesh); particles.push({ mesh: mesh, velocity: vel, life: 1.0 + Math.random() });
@@ -453,14 +463,20 @@ function doShoot() {
     var fl = gunGroup.getObjectByName('flash');
     if (fl) { fl.material.opacity = 1; fl.rotation.z = Math.random() * Math.PI; }
     gunGroup.position.z = 0.15; gunGroup.rotation.x = 0.1; shootCooldown = wp.cooldown;
+    // Build enemy mesh array + lookup once per shot (avoids map()/find() per pellet)
+    var _emArr = []; var _emMap = new Map();
+    for (var _emi = 0; _emi < enemies.length; _emi++) {
+        _emArr[_emi] = enemies[_emi].mesh;
+        _emMap.set(enemies[_emi].mesh, enemies[_emi]);
+    }
     var pellets = wp.pellets || 1; var hit = false;
     for (var p = 0; p < pellets; p++) {
         var extraSpread = state.ammoType === 1 ? 0.04 : 0; // Hålspets has more spread
         _shootSpread.set((Math.random()-0.5)*(wp.spread+extraSpread), (Math.random()-0.5)*(wp.spread+extraSpread));
         _shootRC.setFromCamera(_shootSpread, camera);
-        var eh = _shootRC.intersectObjects(enemies.map(function(e) { return e.mesh; }));
+        var eh = _shootRC.intersectObjects(_emArr);
         if (eh.length > 0 && eh[0].distance < 20) {
-            var en = enemies.find(function(e) { return e.mesh === eh[0].object; });
+            var en = _emMap.get(eh[0].object);
             if (en) {
                 var dmg = wp.damage; if (en.state === 'debate') dmg *= 2;
                 // Ammo type modifiers
@@ -468,9 +484,9 @@ function doShoot() {
                 if (state.ammoType === 2 && Math.random() > 0.6) { en.state = 'debate'; en.stateTimer = 1.5; } // Debatt
                 // Pressekreterare: Shield blocks frontal damage
                 if (en.type === 'pressekreterare') {
-                    var toPlayer = new THREE.Vector3().subVectors(camera.position, en.mesh.position).normalize();
-                    var enemyFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(en.mesh.quaternion);
-                    if (toPlayer.dot(enemyFwd) > -0.3) { // Facing player = shielded
+                    _shootDir.subVectors(camera.position, en.mesh.position).normalize();
+                    _shootTmpVec.set(0, 0, -1).applyQuaternion(en.mesh.quaternion);
+                    if (_shootDir.dot(_shootTmpVec) > -0.3) { // Facing player = shielded
                         spawnParticles(eh[0].point, 0x4444ff, 8); playSound('emptyClick');
                         continue; // Shield blocks
                     }
@@ -763,7 +779,7 @@ function updateEnemy(e, dt, time) {
                 var smat = new THREE.MeshStandardMaterial({ map: colorMap, normalMap: normalMap, normalScale: new THREE.Vector2(1,1), transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
                 var sgeom = new THREE.PlaneGeometry(3, 3);
                 var smesh = new THREE.Mesh(sgeom, smat);
-                smesh.position.copy(_ePos); smesh.castShadow = true; smesh.receiveShadow = true;
+                smesh.position.copy(_ePos); smesh.castShadow = false; smesh.receiveShadow = false;
                 scene.add(smesh);
                 enemies.push({ mesh: smesh, type: st, hp: 30, variant: sv, state: 'chase', stateTimer: 0,
                     patrolOriginX: _ePos.x, patrolOriginZ: _ePos.z, patrolTargetX: _ePos.x, patrolTargetZ: _ePos.z,
@@ -1143,11 +1159,21 @@ function animate() {
         }
     }
 
-    for (var _ei = 0; _ei < enemies.length; _ei++) {
-        var _e = enemies[_ei];
-        // Skip AI update for distant idle enemies
-        if (_e.state === 'idle' && _e.mesh.position.distanceTo(camera.position) > 25) continue;
-        updateEnemy(_e, dt, time);
+    // AI budget: sort by distance, run full AI only on nearest MAX_ACTIVE_AI enemies
+    var MAX_ACTIVE_AI = 6;
+    var _eiSorted = enemies.slice().sort(function(a, b) {
+        return a.mesh.position.distanceTo(camera.position) - b.mesh.position.distanceTo(camera.position);
+    });
+    for (var _ei = 0; _ei < _eiSorted.length; _ei++) {
+        var _e = _eiSorted[_ei];
+        if (_ei < MAX_ACTIVE_AI) {
+            // Full AI update (includes lookAt billboard)
+            updateEnemy(_e, dt, time);
+        } else {
+            // Cheap: just keep sprite facing camera, skip all AI logic
+            _eLook.set(camera.position.x, _e.mesh.position.y, camera.position.z);
+            _e.mesh.lookAt(_eLook);
+        }
     }
     updateDamageIndicator(dt);
 

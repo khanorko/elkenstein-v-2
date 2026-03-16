@@ -388,8 +388,8 @@ export function buildLevel(levelIndex, scene) {
         const geom = new THREE.PlaneGeometry(3, 3);
         const mesh = new THREE.Mesh(geom, mat);
         mesh.position.set(ed.x * 2, 1.5, ed.z * 2);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
+        mesh.castShadow = false; // Disabled: biggest GPU win (sprites don't need shadows)
+        mesh.receiveShadow = false;
         scene.add(mesh);
 
         const isBoss = ['jimmie', 'ebba', 'ulf'].includes(ed.type);
