@@ -33,7 +33,14 @@ const state = {
     missionBossNoDamage: true,
     secretFound: false,
     // Phase 2: Key inventory
-    keys: new Set()
+    keys: new Set(),
+    // Phase 4: Replayability
+    damageTaken: 0,
+    maxCombo: 0,
+    arcadeMode: false,
+    arcadeWave: 0,
+    arcadeScore: 0,
+    modifiers: { bigHead: false, fastEnemies: false, pistolOnly: false }
 };
 
 const CRTShader = {
@@ -105,6 +112,12 @@ function loadLevel(index) {
     state.secretFound = false;
     // New Game Plus: double enemy HP
     if (state.ngPlus) enemies.forEach(function(e) { e.hp *= 2; });
+    // Modifier: Big Head — scale enemy sprites 2x horizontally
+    if (state.modifiers.bigHead) enemies.forEach(function(e) { e.mesh.scale.set(2, 1, 1); });
+    // Modifier: Pistol Only — remove other weapons from inventory
+    if (state.modifiers.pistolOnly) { state.inventory = [1]; state.weapon = 1; buildGunModel(1); }
+    // Reset per-level scoring fields
+    state.damageTaken = 0; state.maxCombo = 0;
 
     const ambient = new THREE.AmbientLight(0xffffff, 0.8); scene.add(ambient);
     const playerLight = new THREE.PointLight(0xffffff, 20, 20);
@@ -218,11 +231,67 @@ var deathQuotes = [
     "Ebba skickar blommor. Falskt medlidande."
 ];
 
+// ─── Phase 4: Leaderboard ──────────────────────────────────────────────────
+function getLeaderboard() {
+    try { return JSON.parse(localStorage.getItem('elkenstein_lb') || '{"levels":{},"total":[]}'); }
+    catch(e) { return { levels: {}, total: [] }; }
+}
+function saveLeaderboard(lb) {
+    localStorage.setItem('elkenstein_lb', JSON.stringify(lb));
+}
+function submitLevelScore(levelIndex, score, grade, time) {
+    var lb = getLeaderboard();
+    var key = 'l' + levelIndex;
+    if (!lb.levels[key] || score > lb.levels[key].score) {
+        lb.levels[key] = { score, grade, time, date: new Date().toLocaleDateString('sv-SE') };
+        saveLeaderboard(lb);
+    }
+}
+function submitTotalScore(score, grade) {
+    var lb = getLeaderboard();
+    lb.total = lb.total || [];
+    lb.total.push({ score, grade, date: new Date().toLocaleDateString('sv-SE') });
+    lb.total.sort(function(a, b) { return b.score - a.score; });
+    lb.total = lb.total.slice(0, 10);
+    lb.gameCompleted = true;
+    saveLeaderboard(lb);
+    checkUnlocks(lb);
+}
+function getUnlocks() {
+    try { return JSON.parse(localStorage.getItem('elkenstein_unlocks') || '{}'); }
+    catch(e) { return {}; }
+}
+function saveUnlocks(u) { localStorage.setItem('elkenstein_unlocks', JSON.stringify(u)); }
+function checkUnlocks(lb) {
+    var u = getUnlocks();
+    var grades = Object.values(lb.levels || {});
+    var sCount = grades.filter(function(g) { return g.grade === 'S'; }).length;
+    var changed = false;
+    if (sCount >= 3 && !u.bigHead)      { u.bigHead = true; changed = true; showMessage('UPPLÅST!', 'Big Head-läge (välj i Extras)'); }
+    if (lb.gameCompleted && !u.fastEnemies) { u.fastEnemies = true; changed = true; showMessage('UPPLÅST!', 'Snabba fiender-läge (välj i Extras)'); }
+    if (lb.gameCompleted && !u.pistolOnly)  { u.pistolOnly = true; changed = true; showMessage('UPPLÅST!', 'Bara pistol-läge (välj i Extras)'); }
+    if (changed) saveUnlocks(u);
+}
+
+// ─── Scoring overhaul ─────────────────────────────────────────────────────────
+function calculateLevelBonus() {
+    var acc = state.shotsFired > 0 ? state.shotsHit / state.shotsFired : 0;
+    var lv = LEVELS[state.level] || {};
+    var par = lv.parTime || 120;
+    var accuracyBonus   = Math.round(acc * 600);
+    var damagePenalty   = Math.round(state.damageTaken * 1.5);
+    var timeBonus       = state.levelTime <= par ? Math.round((par - state.levelTime) * 8) : 0;
+    var styleMult       = 1 + (state.maxCombo > 1 ? (state.maxCombo - 1) * 0.1 : 0);
+    var bonus = Math.round((accuracyBonus + timeBonus - damagePenalty) * styleMult);
+    return { accuracyBonus, damagePenalty, timeBonus, styleMult: styleMult.toFixed(1), bonus: Math.max(0, bonus) };
+}
+
 function getStatsHTML() {
     var acc = state.shotsFired > 0 ? Math.round((state.shotsHit / state.shotsFired) * 100) : 0;
     var lt = state.levelTime || 0;
     var lm = Math.floor(lt / 60), ls = Math.floor(lt % 60);
-    return 'FIENDER BESEGRADE: ' + state.levelKills + '/' + state.levelStartEnemyCount + '<br>TRÄFFSÄKERHET: ' + acc + '%<br>NIVÅ TID: ' + lm + ':' + (ls < 10 ? '0' + ls : ls) + '<br>DEMOKRATIPOÄNG: ' + state.score;
+    var bonus = calculateLevelBonus();
+    return 'FIENDER BESEGRADE: ' + state.levelKills + '/' + state.levelStartEnemyCount + '<br>TRÄFFSÄKERHET: ' + acc + '%<br>NIVÅ TID: ' + lm + ':' + (ls < 10 ? '0' + ls : ls) + '<br>SKADE TAGEN: ' + Math.round(state.damageTaken) + '<br>MAX COMBO: x' + state.maxCombo + '<br>TRÄFFSÄKERHETSBONUS: +' + bonus.accuracyBonus + '<br>TIDSBONUS: +' + bonus.timeBonus + '<br>SKADESTRAFF: -' + bonus.damagePenalty + '<br>STILMULTIPLIKATOR: x' + bonus.styleMult + '<br><b>DEMOKRATIPOÄNG: ' + (state.score + bonus.bonus) + '</b>';
 }
 
 function evaluateMissionObjectives(levelIndex) {
@@ -691,7 +760,7 @@ function explodeBarrel(barrel) {
     if (pd < 5) {
         var pdmg = Math.round(30 * (1 - pd/5));
         if (state.armor > 0) { var abs = Math.min(state.armor, pdmg * 0.7); state.armor -= abs; pdmg -= abs; }
-        state.health -= pdmg; playSound('playerHurt'); updateUI();
+        state.health -= pdmg; state.damageTaken += pdmg; playSound('playerHurt'); updateUI();
         if (state.health <= 0 && !state.dead) playerDied();
     }
     // Chain reaction: nearby barrels
@@ -704,6 +773,7 @@ function explodeBarrel(barrel) {
 
 function addCombo() {
     state.combo++; state.comboTimer = 3;
+    if (state.combo > state.maxCombo) state.maxCombo = state.combo;
     var bonus = state.combo * 50;
     state.score += 100 + bonus;
     if (state.combo >= 3) showMessage('COMBO x' + state.combo + '!', '+' + bonus + ' bonus');
@@ -746,9 +816,9 @@ document.addEventListener('keydown', function(e) {
             playSound('reload'); updateUI();
             break;
         case 'Digit1': if (state.inventory.includes(1)) { state.weapon = 1; buildGunModel(1); updateUI(); } break;
-        case 'Digit2': if (state.inventory.includes(2)) { state.weapon = 2; buildGunModel(2); updateUI(); } break;
-        case 'Digit3': if (state.inventory.includes(3)) { state.weapon = 3; buildGunModel(3); updateUI(); } break;
-        case 'Digit4': if (state.inventory.includes(4)) { state.weapon = 4; buildGunModel(4); updateUI(); } break;
+        case 'Digit2': if (!state.modifiers.pistolOnly && state.inventory.includes(2)) { state.weapon = 2; buildGunModel(2); updateUI(); } else if (state.modifiers.pistolOnly) showMessage('BARA PISTOL!', 'Modifieraren aktiv'); break;
+        case 'Digit3': if (!state.modifiers.pistolOnly && state.inventory.includes(3)) { state.weapon = 3; buildGunModel(3); updateUI(); } else if (state.modifiers.pistolOnly) showMessage('BARA PISTOL!', 'Modifieraren aktiv'); break;
+        case 'Digit4': if (!state.modifiers.pistolOnly && state.inventory.includes(4)) { state.weapon = 4; buildGunModel(4); updateUI(); } else if (state.modifiers.pistolOnly) showMessage('BARA PISTOL!', 'Modifieraren aktiv'); break;
         case 'KeyG': applyQuality((_quality + 1) % 3); showMessage('GRAFIK: ' + _qualityLevels[_quality], _quality === 0 ? 'Lägsta prestanda' : _quality === 1 ? 'Balanserat' : 'Maxkvalitet'); break;
     }
 });
@@ -857,7 +927,7 @@ function updateEnemy(e, dt, time) {
         if (dist < 2.5) {
             var rawDmg = 15 * dt;
             if (state.armor > 0) { var abs = Math.min(state.armor, rawDmg * 0.7); state.armor -= abs; rawDmg -= abs; }
-            state.health -= rawDmg;
+            state.health -= rawDmg; state.damageTaken += rawDmg;
             state.missionBossNoDamage = false;
             if (Math.random() > 0.95) spawnSlogan(e.mesh.position, 'ebba');
             if (state.health <= 0 && !state.dead) playerDied();
@@ -948,7 +1018,8 @@ function updateEnemy(e, dt, time) {
         for (var k = 0; k < enemies.length; k++) {
             if (enemies[k] !== e && enemies[k].state === 'chase' && enemies[k].mesh.position.distanceTo(e.mesh.position) < 6) nearbyAllies++;
         }
-        var coordSpeed = nearbyAllies > 0 && Math.sin(time + e.patrolOriginX * 3) > 0.3 ? 2.0 : 3.5;
+        var _speedMult = state.modifiers.fastEnemies ? 1.8 : 1;
+        var coordSpeed = (nearbyAllies > 0 && Math.sin(time + e.patrolOriginX * 3) > 0.3 ? 2.0 : 3.5) * _speedMult;
 
         _eVec.subVectors(camera.position, e.mesh.position).normalize();
         var flankMul = Math.sin(time * 2 + e.patrolOriginX) * 2;
@@ -975,7 +1046,7 @@ function updateEnemy(e, dt, time) {
         e.state = 'chase';
         var rawDmg = 10 * dt;
         if (state.armor > 0) { var absorbed = Math.min(state.armor, rawDmg * 0.7); state.armor -= absorbed; rawDmg -= absorbed; }
-        state.health -= rawDmg;
+        state.health -= rawDmg; state.damageTaken += rawDmg;
         if (isBoss) state.missionBossNoDamage = false;
         if (Math.random() > 0.95) { playSound('damageHit'); showDamageDirection(e.mesh.position); }
         _dom.vig.style.boxShadow = state.health < 30 ? 'inset 0 0 100px rgba(255,0,0,0.5)' : 'inset 0 0 100px rgba(0,0,0,0.8)';
@@ -1026,21 +1097,41 @@ function playerDied() {
         setTimeout(function() {
             _dom.vig.style.background = 'none';
             _dom.vig.style.boxShadow = 'inset 0 0 100px rgba(0,0,0,0.8)';
-            loadLevel(state.level);
-            state.inventory = savedInventory;
-            state.weapon = savedWeapon;
+            if (state.arcadeMode) {
+                // Arcade respawn: regenerate arena, restart current wave
+                generateArcadeArena();
+                spawnArcadeWave(state.arcadeWave);
+            } else {
+                loadLevel(state.level);
+                state.inventory = savedInventory;
+                state.weapon = savedWeapon;
+            }
             state.dead = false;
             state.playing = true;
-            buildGunModel(savedWeapon);
+            buildGunModel(state.modifiers.pistolOnly ? 1 : state.weapon);
             controls.lock();
-            startMusic('exploration');
-            startAmbient();
+            startMusic(state.arcadeMode ? 'combat' : 'exploration');
+            if (!state.arcadeMode) startAmbient();
         }, 1800);
         return;
     }
     // Game over — inga liv kvar
     state.dead = true; state.playing = false; playSound('gameOver'); stopMusic(); stopAmbient();
     _dom.vig.style.background = 'rgba(255,0,0,0.5)';
+    // Arcade game over: save high score + show wave reached
+    if (state.arcadeMode) {
+        state.arcadeMode = false;
+        var arcadeLb = getLeaderboard(); arcadeLb.arcade = arcadeLb.arcade || [];
+        arcadeLb.arcade.push({ wave: state.arcadeWave, score: state.arcadeScore, date: new Date().toLocaleDateString('sv-SE') });
+        arcadeLb.arcade.sort(function(a, b) { return b.score - a.score; });
+        arcadeLb.arcade = arcadeLb.arcade.slice(0, 10);
+        saveLeaderboard(arcadeLb);
+        document.getElementById('deathStats').innerHTML = 'ARKADLÄGE SLUT<br>VÅG NÅD: ' + state.arcadeWave + '<br>POÄNG: ' + state.arcadeScore;
+        var subEl = document.querySelector('#deathScreen .screen-subtitle');
+        if (subEl) subEl.textContent = 'Demokratin föll... i arkaden.';
+        document.getElementById('deathScreen').style.display = 'flex'; document.exitPointerLock();
+        return;
+    }
     document.getElementById('deathStats').innerHTML = getStatsHTML();
     var subEl = document.querySelector('#deathScreen .screen-subtitle');
     if (subEl) subEl.textContent = deathQuotes[Math.floor(Math.random() * deathQuotes.length)];
@@ -1237,6 +1328,10 @@ function animate() {
                     // Bonus score for objectives
                     var bonusObjs = objs.filter(function(o) { return o.done && !o.primary; });
                     state.score += bonusObjs.length * 500;
+                    // Apply scoring bonuses
+                    var bonusBreakdown = calculateLevelBonus();
+                    state.score += bonusBreakdown.bonus;
+                    submitLevelScore(completedLevel, state.score, gradeInfo.grade, state.levelTime);
                     document.getElementById('levelTitle').textContent = 'NIVÅ ' + (completedLevel + 1) + ' KLAR';
                     document.getElementById('levelSub').textContent = LEVELS[completedLevel].name;
                     document.getElementById('levelStats').innerHTML = getStatsHTML();
@@ -1247,6 +1342,12 @@ function animate() {
                     document.getElementById('levelScreen').style.display = 'flex'; document.exitPointerLock();
                 } else {
                     state.playing = false; stopMusic(); playSound('victory');
+                    var winObjs = evaluateMissionObjectives(completedLevel);
+                    var winGrade = calculateGrade(winObjs);
+                    var winBonus = calculateLevelBonus();
+                    state.score += winBonus.bonus;
+                    submitLevelScore(completedLevel, state.score, winGrade.grade, state.levelTime);
+                    submitTotalScore(state.score, winGrade.grade);
                     document.getElementById('winStats').innerHTML = getStatsHTML();
                     document.getElementById('winScreen').style.display = 'flex'; document.exitPointerLock();
                 }
@@ -1323,7 +1424,7 @@ function animate() {
             if (Math.abs(tdx) < 0.9 && Math.abs(tdz) < 0.9) {
                 tz._dmgTimer -= dt;
                 if (tz._dmgTimer <= 0) {
-                    state.health -= 5;
+                    state.health -= 5; state.damageTaken += 5;
                     tz._dmgTimer = 0.5;
                     updateUI();
                     if (!tz._shown) {
@@ -1355,7 +1456,7 @@ function animate() {
             var cdz = camera.position.z - cr.z;
             if (Math.abs(cdx) < 0.85 && Math.abs(cdz) < 0.85 && frac < 0.2) {
                 if (cr._dmgCooldown <= 0) {
-                    state.health -= 25;
+                    state.health -= 25; state.damageTaken += 25;
                     cr._dmgCooldown = 0.8;
                     playSound('damage');
                     showMessage('KROSSAS!', 'Spring undan pressar!');
@@ -1505,6 +1606,7 @@ function animate() {
         }
     }
     updateDamageIndicator(dt);
+    updateArcadeMode();
 
     updateUI();
     composer.render();
@@ -1519,5 +1621,294 @@ window.addEventListener('resize', function() {
     composer.setSize(window.innerWidth, window.innerHeight);
     bloomPass.resolution.set(Math.floor(window.innerWidth / 2), Math.floor(window.innerHeight / 2));
 });
+
+// ─── Gallery ───────────────────────────────────────────────────────────────────
+var ENEMY_CATALOG = [
+    { id: 'sd',            name: 'SD-Aktivist',         hp: 30, dmg: 8,  flavor: 'Delar ut propaganda och besvikelser i lika delar.' },
+    { id: 'jarnror',       name: 'Järnrör',             hp: 20, dmg: 12, flavor: 'Känd för sitt direkta politiska argument.' },
+    { id: 'bss_retro',     name: 'BSS Retro',           hp: 25, dmg: 10, flavor: 'Nostalgisk efter 90-talets nedskärningar.' },
+    { id: 'troll',         name: 'Troll-Operatör',      hp: 35, dmg: 5,  flavor: 'Saktar ner dig med logiska vurpor.' },
+    { id: 'opinionsbildare', name: 'Opinionsbildare',   hp: 45, dmg: 10, flavor: 'Kallar på förstärkningar när det krisar.' },
+    { id: 'jimmie',        name: 'Jimmie Åkesson',      hp: 150, dmg: 20, flavor: 'BOSS. Missbrukar debatträtten. Kan stunsas.' },
+    { id: 'ebba',          name: 'Ebba Busch',          hp: 120, dmg: 15, flavor: 'BOSS. Falukorv-spin-attack. Cirkelrör sig.' },
+    { id: 'ulf',           name: 'Ulf Kristersson',     hp: 100, dmg: 10, flavor: 'BOSS. Dash-attack + duckar när det krisar.' },
+    { id: 'lars_werner',   name: 'Lars Werner',         hp: 80,  dmg: 0,  flavor: 'BOSS. Helar dig av misstag. Välmenande men ineffektiv.' }
+];
+
+window.showGallery = function() {
+    document.getElementById('overlay').style.display = 'none';
+    var gScreen = document.getElementById('galleryScreen');
+    if (!gScreen) {
+        gScreen = document.createElement('div');
+        gScreen.id = 'galleryScreen';
+        gScreen.className = 'game-screen';
+        gScreen.style.cssText = 'background:rgba(0,0,0,0.97);overflow-y:auto;align-items:flex-start;padding:30px 20px';
+        document.body.appendChild(gScreen);
+    }
+    var html = '<div style="font-family:\'Courier New\',monospace;color:#fc0;font-size:22px;font-weight:bold;margin-bottom:20px;text-align:center;text-shadow:0 0 10px #fc0">FIENDENS GALLERI</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;width:100%;max-width:900px;margin:0 auto">';
+    ENEMY_CATALOG.forEach(function(en) {
+        var isBoss = en.hp > 80;
+        var borderColor = isBoss ? '#f44' : '#0c8';
+        var canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 64;
+        var { colorMap } = createEnemyTexture(en.id, 'idle', 0);
+        html += '<div style="border:1px solid ' + borderColor + ';padding:14px;background:rgba(255,255,255,0.04);font-family:\'Courier New\',monospace">';
+        html += '<div style="color:' + (isBoss ? '#f44' : '#0f0') + ';font-weight:bold;font-size:14px;margin-bottom:6px">' + (isBoss ? '☠ BOSS: ' : '') + en.name + '</div>';
+        html += '<div style="color:#aaa;font-size:11px;margin-bottom:8px">' + en.flavor + '</div>';
+        html += '<div style="color:#ccc;font-size:12px">HP: <span style="color:#f44">' + en.hp + '</span> &nbsp; SKADA: <span style="color:#fa0">' + (en.dmg > 0 ? en.dmg + '/s' : 'ingen') + '</span></div>';
+        html += '</div>';
+    });
+    html += '</div>';
+    html += '<div style="margin-top:28px;text-align:center"><button onclick="window.closeGallery()">STÄNG</button></div>';
+    gScreen.innerHTML = html;
+    gScreen.style.display = 'flex';
+    gScreen.style.flexDirection = 'column';
+};
+
+window.closeGallery = function() {
+    var gScreen = document.getElementById('galleryScreen');
+    if (gScreen) gScreen.style.display = 'none';
+    document.getElementById('overlay').style.display = 'flex';
+};
+
+// ─── Extras / Modifier selector ────────────────────────────────────────────────
+window.showExtras = function() {
+    document.getElementById('overlay').style.display = 'none';
+    var eScreen = document.getElementById('extrasScreen');
+    if (!eScreen) {
+        eScreen = document.createElement('div');
+        eScreen.id = 'extrasScreen';
+        eScreen.className = 'game-screen';
+        document.body.appendChild(eScreen);
+    }
+    var u = getUnlocks();
+    var lb = getLeaderboard();
+    function renderExtras() {
+        var mods = state.modifiers;
+        var html = '<div style="font-family:\'Courier New\',monospace;color:#fc0;font-size:22px;font-weight:bold;margin-bottom:20px;text-shadow:0 0 10px #fc0">EXTRAS &amp; MODIFIERARE</div>';
+        // Leaderboard summary
+        html += '<div style="font-family:\'Courier New\',monospace;font-size:13px;color:#aaa;margin-bottom:18px;max-width:500px;text-align:left">';
+        html += '<div style="color:#fff;font-size:15px;font-weight:bold;margin-bottom:8px">TOPPLISTA (TOTAL)</div>';
+        if (lb.total && lb.total.length > 0) {
+            lb.total.forEach(function(e, i) {
+                html += '<div style="color:' + (i === 0 ? '#fc0' : '#888') + '">#' + (i+1) + ' ' + e.score + ' poäng (' + e.grade + ') — ' + e.date + '</div>';
+            });
+        } else { html += '<div style="color:#555">Inga posters ännu. Klara spelet!</div>'; }
+        html += '</div>';
+        // Arcade leaderboard
+        html += '<div style="font-family:\'Courier New\',monospace;font-size:13px;color:#aaa;margin-bottom:18px;max-width:500px;text-align:left">';
+        html += '<div style="color:#0f0;font-size:15px;font-weight:bold;margin-bottom:8px">TOPPLISTA ARKAD</div>';
+        if (lb.arcade && lb.arcade.length > 0) {
+            lb.arcade.forEach(function(e, i) {
+                html += '<div style="color:' + (i === 0 ? '#0f0' : '#666') + '">#' + (i+1) + ' Våg ' + e.wave + ' — ' + e.score + ' poäng — ' + e.date + '</div>';
+            });
+        } else { html += '<div style="color:#555">Inga arkadpoäng ännu.</div>'; }
+        html += '</div>';
+        // Per-level bests
+        html += '<div style="font-family:\'Courier New\',monospace;font-size:12px;color:#aaa;margin-bottom:18px;max-width:500px;text-align:left">';
+        html += '<div style="color:#fff;font-size:13px;font-weight:bold;margin-bottom:6px">BÄSTA PER NIVÅ</div>';
+        for (var i = 0; i < 6; i++) {
+            var k = 'l' + i; var lvBest = lb.levels && lb.levels[k];
+            var lname = (LEVELS[i] || {}).name || ('Nivå ' + (i+1));
+            html += '<div>' + lname + ': ' + (lvBest ? ('<span style="color:#fc0">' + lvBest.score + ' (' + lvBest.grade + ')</span>') : '<span style="color:#555">—</span>') + '</div>';
+        }
+        html += '</div>';
+        // Modifiers
+        html += '<div style="font-family:\'Courier New\',monospace;font-size:14px;color:#aaa;max-width:500px;text-align:left">';
+        html += '<div style="color:#fff;font-size:15px;font-weight:bold;margin-bottom:10px">MODIFIERARE</div>';
+        function modBtn(key, label, unlocked) {
+            var active = mods[key];
+            var btnStyle = unlocked
+                ? 'cursor:pointer;padding:8px 16px;font-family:\'Courier New\',monospace;font-size:13px;font-weight:bold;border:2px solid ' + (active ? '#fc0' : '#555') + ';background:' + (active ? '#332200' : '#111') + ';color:' + (active ? '#fc0' : '#888') + ';margin-bottom:8px;display:block;width:100%'
+                : 'padding:8px 16px;font-family:\'Courier New\',monospace;font-size:13px;border:1px solid #333;background:#111;color:#333;margin-bottom:8px;display:block;width:100%;cursor:default';
+            var onclick = unlocked ? 'onclick="window.toggleModifier(\'' + key + '\')"' : '';
+            return '<button ' + onclick + ' style="' + btnStyle + '">' + (unlocked ? (active ? '✓ ' : '○ ') : '🔒 ') + label + (unlocked ? '' : ' (lås upp genom att klara spelet)') + '</button>';
+        }
+        html += modBtn('bigHead', 'BIG HEAD-LÄGE (3x S-betyg)', !!u.bigHead);
+        html += modBtn('fastEnemies', 'SNABBA FIENDER (klara spelet)', !!u.fastEnemies);
+        html += modBtn('pistolOnly', 'BARA PISTOL (klara spelet)', !!u.pistolOnly);
+        html += '</div>';
+        html += '<div style="margin-top:24px"><button onclick="window.closeExtras()">STÄNG</button></div>';
+        eScreen.innerHTML = html;
+        eScreen.style.display = 'flex';
+        eScreen.style.flexDirection = 'column';
+    }
+    window.toggleModifier = function(key) {
+        state.modifiers[key] = !state.modifiers[key];
+        renderExtras();
+    };
+    renderExtras();
+};
+
+window.closeExtras = function() {
+    var eScreen = document.getElementById('extrasScreen');
+    if (eScreen) eScreen.style.display = 'none';
+    document.getElementById('overlay').style.display = 'flex';
+};
+
+// ─── Arcade mode ───────────────────────────────────────────────────────────────
+var arcadeEnemies = [];
+var arcadeWaveTimer = 0;
+var ARCADE_ENEMY_TYPES = ['sd', 'jarnror', 'bss_retro', 'troll', 'opinionsbildare'];
+var ARCADE_BOSS_TYPES  = ['jimmie', 'ebba', 'ulf', 'lars_werner'];
+
+function generateArcadeArena() {
+    // Clear scene first
+    while(scene.children.length > 0) scene.remove(scene.children[0]);
+    activeSlogans = []; particles = []; arcadeEnemies = [];
+    enemies = []; exits = []; pickups = []; barrels = []; props = [];
+    vendingMachines = []; secretWalls = []; toxicZones = []; crushers = []; alarmPanels = [];
+
+    var W = 20, H = 20;
+    var wallMat = new THREE.MeshStandardMaterial({ color: 0x334433 });
+    var floorMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+    var cellSize = 2;
+
+    // Floor
+    var floorGeo = new THREE.PlaneGeometry(W * cellSize, H * cellSize);
+    floorGeo.rotateX(-Math.PI / 2);
+    var floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.position.set(W, 0, H);
+    scene.add(floor);
+
+    // Outer walls
+    walls = [];
+    var wallGeo = new THREE.BoxGeometry(cellSize, cellSize * 2, cellSize);
+    function addWall(x, z) {
+        var m = new THREE.Mesh(wallGeo, wallMat);
+        m.position.set(x * cellSize + 1, 1, z * cellSize + 1);
+        scene.add(m); walls.push(m);
+    }
+    for (var x = 0; x < W; x++) { addWall(x, 0); addWall(x, H-1); }
+    for (var z = 1; z < H-1; z++) { addWall(0, z); addWall(W-1, z); }
+
+    // Procedural pillars (random interior walls for cover)
+    for (var pi = 0; pi < 12; pi++) {
+        var px = 2 + Math.floor(Math.random() * (W - 4));
+        var pz = 2 + Math.floor(Math.random() * (H - 4));
+        if (Math.abs(px - W/2) < 2 && Math.abs(pz - H/2) < 2) continue; // keep center clear
+        addWall(px, pz);
+        if (Math.random() > 0.4) addWall(px + 1, pz);
+        if (Math.random() > 0.4) addWall(px, pz + 1);
+    }
+
+    rebuildCollisionCache();
+
+    // Lights
+    var ambient = new THREE.AmbientLight(0xffffff, 0.6); scene.add(ambient);
+    var playerLight = new THREE.PointLight(0xffffff, 20, 20);
+    playerLight.castShadow = true;
+    playerLight.shadow.mapSize.width = 256; playerLight.shadow.mapSize.height = 256;
+    camera.add(playerLight);
+    scene.add(gunLight); scene.add(camera);
+    // Eerie arena lights
+    for (var li = 0; li < 4; li++) {
+        var aLight = new THREE.PointLight(0x00ff44, 8, 15);
+        aLight.position.set(5 + li * 7, 2, 10 + (li % 2) * 4);
+        scene.add(aLight);
+    }
+    scene.fog = new THREE.FogExp2(0x001100, 0.04);
+    scene.background = new THREE.Color(0x001100);
+
+    camera.position.set(W, 1.6, H);
+
+    // HUD update for arcade
+    var missionEl = document.getElementById('mission-text');
+    if (missionEl) missionEl.textContent = '- Överlev så länge du kan\n- Klara våg ' + (state.arcadeWave + 1);
+    showMessage('ARKADLÄGE!', 'Klara våg ' + (state.arcadeWave + 1));
+}
+
+function spawnArcadeWave(wave) {
+    state.arcadeWave = wave;
+    var count = 3 + wave * 2;
+    var isBossWave = (wave > 0 && wave % 5 === 0);
+    var types = isBossWave
+        ? [ARCADE_BOSS_TYPES[Math.floor(Math.random() * ARCADE_BOSS_TYPES.length)]]
+        : ARCADE_ENEMY_TYPES;
+    count = isBossWave ? 1 : Math.min(count, 12);
+    showMessage('VÅG ' + (wave + 1), isBossWave ? 'BOSS-VÅG!' : count + ' fiender');
+    if (isBossWave) playSound('bossAlert'); else playSound('enemyAlert');
+
+    for (var i = 0; i < count; i++) {
+        (function(idx) {
+            setTimeout(function() {
+                var etype = isBossWave ? types[0] : types[Math.floor(Math.random() * types.length)];
+                var angle = (idx / count) * Math.PI * 2;
+                var spawnX = 20 + Math.cos(angle) * 12;
+                var spawnZ = 20 + Math.sin(angle) * 12;
+                var hp = isBossWave ? 200 + wave * 20 : 30 + wave * 5;
+                var { colorMap, normalMap } = createEnemyTexture(etype, 'idle', idx % 8);
+                var mat = new THREE.MeshStandardMaterial({ map: colorMap, normalMap: normalMap, normalScale: new THREE.Vector2(1,1), transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+                var geom = new THREE.PlaneGeometry(3, 3);
+                var mesh = new THREE.Mesh(geom, mat);
+                mesh.position.set(spawnX, 1.5, spawnZ);
+                mesh.castShadow = false; mesh.receiveShadow = false;
+                scene.add(mesh);
+                var en = {
+                    mesh: mesh, type: etype, hp: hp, maxHp: hp, state: 'chase',
+                    speed: 3 + wave * 0.3,
+                    patrolOriginX: spawnX, patrolOriginZ: spawnZ,
+                    patrolTargetX: spawnX, patrolTargetZ: spawnZ,
+                    patrolPause: 0, footstepTimer: 0, alertCooldown: 0
+                };
+                enemies.push(en); arcadeEnemies.push(en);
+                if (state.modifiers.bigHead) mesh.scale.set(2, 1, 1);
+            }, idx * 300);
+        })(i);
+    }
+
+    var missionEl = document.getElementById('mission-text');
+    if (missionEl) missionEl.textContent = '- Överlev så länge du kan\n- VÅG ' + (wave + 1);
+}
+
+window.startArcade = function() {
+    document.getElementById('overlay').style.display = 'none';
+    var eScreen = document.getElementById('extrasScreen');
+    if (eScreen) eScreen.style.display = 'none';
+    initAudio();
+    state.kills = 0; state.shotsFired = 0; state.shotsHit = 0;
+    state.gameTime = 0; state.level = 0; state.weapon = 1; state.inventory = [1];
+    state.lives = 3; state.health = 100; state.ammo = 50; state.arcadeMode = true;
+    state.arcadeWave = 0; state.arcadeScore = 0; state.dead = false; state.playing = true;
+    if (state.modifiers.pistolOnly) { state.inventory = [1]; }
+    buildGunModel(1);
+    generateArcadeArena();
+    spawnArcadeWave(0);
+    controls.lock();
+    startMusic('combat');
+};
+
+// Check arcade wave completion in game loop
+function updateArcadeMode() {
+    if (!state.arcadeMode || !state.playing) return;
+    var remaining = enemies.filter(function(e) { return e.hp > 0; }).length;
+    if (remaining === 0 && arcadeEnemies.length > 0) {
+        // Wave cleared
+        arcadeEnemies = [];
+        state.arcadeScore += 500 + state.arcadeWave * 200;
+        state.score = state.arcadeScore;
+        // Drop health + ammo pack
+        var packPos = new THREE.Vector3(20, 0.5, 20);
+        var hpGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+        var hpMat = new THREE.MeshStandardMaterial({ color: 0xff4444, emissive: 0xff2222, emissiveIntensity: 0.5 });
+        var hpMesh = new THREE.Mesh(hpGeo, hpMat);
+        hpMesh.position.copy(packPos);
+        scene.add(hpMesh);
+        pickups.push({ type: 'health', mesh: hpMesh, active: true });
+        var amGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+        var amMat = new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xaaaa00, emissiveIntensity: 0.5 });
+        var amMesh = new THREE.Mesh(amGeo, amMat);
+        amMesh.position.set(21, 0.5, 20);
+        scene.add(amMesh);
+        pickups.push({ type: 'ammo', mesh: amMesh, active: true });
+
+        setTimeout(function() {
+            if (state.arcadeMode && state.playing) {
+                spawnArcadeWave(state.arcadeWave + 1);
+            }
+        }, 2500);
+    }
+}
 
 animate();
