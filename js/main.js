@@ -34,16 +34,15 @@ const state = {
 };
 
 const CRTShader = {
-    uniforms: { "tDiffuse": { value: null }, "time": { value: 0 }, "curvature": { value: new THREE.Vector2(3.5, 3.5) } },
+    uniforms: { "tDiffuse": { value: null }, "time": { value: 0 } },
     vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    // Simplified: removed RGB separation (chromatic aberration) — saves 2 texture fetches/pixel
     fragmentShader: `uniform sampler2D tDiffuse; uniform float time; varying vec2 vUv;
         void main() { vec2 uv = vUv;
             float scanline = sin(uv.y * 800.0 + time * 10.0) * 0.04;
-            float r = texture2D(tDiffuse, uv + vec2(0.002, 0.0)).r;
-            float g = texture2D(tDiffuse, uv).g;
-            float b = texture2D(tDiffuse, uv - vec2(0.002, 0.0)).b;
+            vec3 col = texture2D(tDiffuse, uv).rgb;
             float vig = (0.8 + 0.2*16.0*uv.x*uv.y*(1.0-uv.x)*(1.0-uv.y));
-            gl_FragColor = vec4(vec3(r,g,b) * vig - scanline, 1.0); }`
+            gl_FragColor = vec4(col * vig - scanline, 1.0); }`
 };
 
 const scene = new THREE.Scene();
@@ -61,6 +60,19 @@ const bloomPass = new UnrealBloomPass(halfRes, 0.5, 0.4, 0.85);
 const crtPass = new ShaderPass(CRTShader);
 const composer = new EffectComposer(renderer);
 composer.addPass(renderScene); composer.addPass(bloomPass); composer.addPass(crtPass);
+
+// Quality selector: LOW=0, MED=1, HIGH=2
+// Bloom is expensive — off by default on Safari
+var _isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+var _qualityLevels = ['LOW', 'MED', 'HIGH'];
+var _quality = _isSafari ? 0 : 2;
+function applyQuality(q) {
+    _quality = q;
+    bloomPass.enabled = (q >= 2);  // Bloom only on HIGH
+    var el = document.getElementById('quality-btn');
+    if (el) el.textContent = 'GRAFIK: ' + _qualityLevels[q];
+}
+applyQuality(_quality);
 
 let walls = [], doors = [], enemies = [], exits = [], activeSlogans = [], particles = [], pickups = [], barrels = [], props = [], vendingMachines = [];
 
@@ -646,6 +658,7 @@ document.addEventListener('keydown', function(e) {
         case 'Digit2': if (state.inventory.includes(2)) { state.weapon = 2; buildGunModel(2); updateUI(); } break;
         case 'Digit3': if (state.inventory.includes(3)) { state.weapon = 3; buildGunModel(3); updateUI(); } break;
         case 'Digit4': if (state.inventory.includes(4)) { state.weapon = 4; buildGunModel(4); updateUI(); } break;
+        case 'KeyG': applyQuality((_quality + 1) % 3); showMessage('GRAFIK: ' + _qualityLevels[_quality], _quality === 0 ? 'Lägsta prestanda' : _quality === 1 ? 'Balanserat' : 'Maxkvalitet'); break;
     }
 });
 document.addEventListener('keyup', function(e) {
@@ -957,6 +970,7 @@ var _dom = {
 };
 var _mmCtx = _dom.mmCvs.getContext('2d');
 var _minimapFrame = 0;
+var _compassFrame = 0;
 var _wn = { 1: 'PISTOL', 2: 'KULSPRUTA', 3: 'HAGELGEVÄR', 4: 'FOLKVETT' };
 var _ammoTypes = ['STD', 'HP', 'DBT'];
 
@@ -971,13 +985,16 @@ function updateUI() {
     if (_dom.score) _dom.score.textContent = 'POÄNG: ' + state.score;
     if (_dom.combo) _dom.combo.textContent = state.combo >= 2 ? 'COMBO x' + state.combo : '';
 
-    // Compass
-    var degree = THREE.MathUtils.radToDeg(camera.rotation.y) % 360;
-    _dom.compass.style.transform = 'translateX(' + (-(degree / 90) * 150) + 'px)';
+    // Compass — throttled to every 3rd frame
+    _compassFrame++;
+    if (_compassFrame % 3 === 0) {
+        var degree = THREE.MathUtils.radToDeg(camera.rotation.y) % 360;
+        _dom.compass.style.transform = 'translateX(' + (-(degree / 90) * 150) + 'px)';
+    }
 
-    // Minimap - only redraw every 6th frame
+    // Minimap - only redraw every 12th frame (was 6th)
     _minimapFrame++;
-    if (_minimapFrame % 6 === 0) {
+    if (_minimapFrame % 12 === 0) {
         _mmCtx.clearRect(0, 0, 150, 150);
         _mmCtx.fillStyle = '#111';
         _mmCtx.beginPath(); _mmCtx.arc(75, 75, 75, 0, Math.PI * 2); _mmCtx.fill();
@@ -1180,6 +1197,8 @@ function animate() {
     updateUI();
     composer.render();
 }
+
+window._cycleQuality = function() { applyQuality((_quality + 1) % 3); };
 
 window.addEventListener('resize', function() {
     camera.aspect = window.innerWidth / window.innerHeight;
