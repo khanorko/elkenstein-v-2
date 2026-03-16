@@ -31,7 +31,9 @@ const state = {
     levelKills: 0,
     levelTime: 0,
     missionBossNoDamage: true,
-    secretFound: false
+    secretFound: false,
+    // Phase 2: Key inventory
+    keys: new Set()
 };
 
 const CRTShader = {
@@ -76,6 +78,7 @@ function applyQuality(q) {
 applyQuality(_quality);
 
 let walls = [], doors = [], enemies = [], exits = [], activeSlogans = [], particles = [], pickups = [], barrels = [], props = [], vendingMachines = [];
+let secretWalls = [], toxicZones = [], crushers = [], alarmPanels = [];
 
 function loadLevel(index) {
     while(scene.children.length > 0) scene.remove(scene.children[0]);
@@ -86,11 +89,18 @@ function loadLevel(index) {
     walls = data.walls; doors = data.doors; enemies = data.enemies; exits = data.exits;
     pickups = data.pickups || []; barrels = data.barrels || []; props = data.props || [];
     vendingMachines = data.vendingMachines || [];
+    secretWalls  = data.secretWalls  || [];
+    toxicZones   = data.toxicZones   || [];
+    crushers     = data.crushers     || [];
+    alarmPanels  = data.alarmPanels  || [];
     camera.position.copy(data.playerStart);
     // Reset mission tracking for new level
     state.levelStartEnemyCount = enemies.length;
     state.levelKills = 0;
     state.levelTime = 0;
+    // Reset key inventory on new level
+    state.keys = new Set();
+    updateKeyHUD();
     state.missionBossNoDamage = true;
     state.secretFound = false;
     // New Game Plus: double enemy HP
@@ -116,6 +126,8 @@ function loadLevel(index) {
         setTimeout(function() { showMessage('TIPS', 'WASD = rör dig, mus = sikta, klick = skjut'); }, 2500);
         setTimeout(function() { showMessage('TIPS', 'E/SPACE = öppna dörrar, 1-4 = byt vapen'); }, 6000);
         setTimeout(function() { showMessage('TIPS', 'Hitta utgången (E) för att klara nivån'); }, 10000);
+        setTimeout(function() { showMessage('NYCKELKORT', 'Gula dörrar kräver gult nyckelkort!'); }, 15000);
+        setTimeout(function() { showMessage('HEMLIGHETER', 'Skjut på väggar — kanske öppnar de sig?'); }, 20000);
     }
 
     // Collect deferred texture tasks: wall decorations + enemy textures
@@ -412,8 +424,37 @@ function interact() {
     const hits = rc.intersectObjects(doors.map(function(d) { return d.mesh; }));
     if (hits.length > 0 && hits[0].distance < 3) {
         const door = doors.find(function(d) { return d.mesh === hits[0].object; });
-        if (door) { door.open = !door.open; playSound('door'); }
+        if (door) {
+            if (door.locked) {
+                if (state.keys.has(door.keyColor)) {
+                    door.locked = false;
+                    door.open = true;
+                    playSound('door');
+                    const colorName = door.keyColor === 'yellow' ? 'GUL' : 'BLÅ';
+                    showMessage(colorName + ' DÖRR ÖPPNAD!', 'Nyckelkortet fungerade!');
+                } else {
+                    playSound('hitMarker');
+                    const colorName = door.keyColor === 'yellow' ? 'gult' : 'blått';
+                    showMessage('LÅST!', 'Behöver ' + colorName + ' nyckelkort');
+                }
+            } else {
+                door.open = !door.open;
+                playSound('door');
+            }
+        }
     }
+    // Alarm panels: disable by interacting before they trigger
+    alarmPanels.forEach(function(ap) {
+        if (!ap.active || ap.triggered) return;
+        var dist = camera.position.distanceTo(new THREE.Vector3(ap.x, camera.position.y, ap.z));
+        if (dist < 2.0) {
+            ap.active = false;
+            ap.lightMesh.material.emissiveIntensity = 0;
+            ap.lightMesh.material.color.setHex(0x333333);
+            showMessage('LARM AVAKTIVERAT', 'Panelen stängdes av.');
+            playSound('door');
+        }
+    });
     enemies.forEach(function(e) {
         if (e.type === 'jimmie' && camera.position.distanceTo(e.mesh.position) < 3) {
             e.state = 'debate'; e.stateTimer = 4.0;
@@ -549,10 +590,28 @@ function doShoot() {
                 }
             }
         } else {
-            var wh = _shootRC.intersectObjects(walls.concat(doors.map(function(d) { return d.mesh; })));
+            var secretMeshes = secretWalls.filter(function(sw) { return !sw.revealed; }).map(function(sw) { return sw.mesh; });
+            var wh = _shootRC.intersectObjects(walls.concat(doors.map(function(d) { return d.mesh; })).concat(secretMeshes));
             if (wh.length > 0 && wh[0].distance < 30) {
-                spawnParticles(wh[0].point, 0xaaaaaa, 8, 0.03);
-                if (Math.random() > 0.6) spawnPaperParticles(wh[0].point);
+                // Check if hit a secret wall
+                var hitSW = secretWalls.find(function(sw) { return !sw.revealed && sw.mesh === wh[0].object; });
+                if (hitSW) {
+                    hitSW.hp--;
+                    spawnParticles(wh[0].point, 0xaaaaff, 10, 0.04);
+                    if (hitSW.hp <= 0) {
+                        hitSW.revealed = true;
+                        state.secretFound = true;
+                        playSound('door');
+                        showMessage('HEMLIG GÅNG!', 'Väggen öppnar sig...');
+                    } else {
+                        // Visual feedback: wall cracks
+                        hitSW.mesh.material.emissive = new THREE.Color(0x112244);
+                        hitSW.mesh.material.emissiveIntensity = 0.3;
+                    }
+                } else {
+                    spawnParticles(wh[0].point, 0xaaaaaa, 8, 0.03);
+                    if (Math.random() > 0.6) spawnPaperParticles(wh[0].point);
+                }
             }
         }
     }
@@ -723,6 +782,13 @@ function checkCollision(pos, radius) {
     for (var j = 0; j < doors.length; j++) {
         if (!doors[j].open) {
             _tmpBox.setFromObject(doors[j].mesh);
+            if (_tmpBox.intersectsBox(_playerBox)) return true;
+        }
+    }
+    // Check unrevealed secret walls
+    for (var k = 0; k < secretWalls.length; k++) {
+        if (!secretWalls[k].revealed) {
+            _tmpBox.setFromObject(secretWalls[k].mesh);
             if (_tmpBox.intersectsBox(_playerBox)) return true;
         }
     }
@@ -1027,7 +1093,8 @@ var _dom = {
     dmgRight: document.getElementById('dmg-right'),
     dmgBottom: document.getElementById('dmg-bottom'),
     dmgLeft: document.getElementById('dmg-left'),
-    lives: document.getElementById('lives-display')
+    lives: document.getElementById('lives-display'),
+    keys: document.getElementById('keys-display')
 };
 var _mmCtx = _dom.mmCvs.getContext('2d');
 
@@ -1037,6 +1104,19 @@ function updateLivesHUD() {
     for (var _li = 0; _li < 3; _li++) hearts += _li < state.lives ? '♥' : '♡';
     _dom.lives.textContent = 'LIV: ' + hearts;
     _dom.lives.style.color = state.lives === 1 ? '#f44' : '#f0f';
+}
+
+function updateKeyHUD() {
+    if (!_dom.keys) return;
+    var parts = [];
+    if (state.keys.has('yellow')) parts.push('<span style="color:#ffdd00">&#9632; GULT</span>');
+    if (state.keys.has('blue'))   parts.push('<span style="color:#44aaff">&#9632; BLÅTT</span>');
+    if (parts.length > 0) {
+        _dom.keys.innerHTML = 'KORT: ' + parts.join(' ');
+        _dom.keys.style.display = 'block';
+    } else {
+        _dom.keys.style.display = 'none';
+    }
 }
 var _minimapFrame = 0;
 var _compassFrame = 0;
@@ -1207,6 +1287,18 @@ function animate() {
                             playSound('pickup'); showMessage('EXTRA LIV!', 'Redan max — +500 poäng');
                         }
                         break;
+                    case 'keycard_yellow':
+                        state.keys.add('yellow');
+                        playSound('weaponPickup');
+                        showMessage('GULT NYCKELKORT!', 'Öppnar gula låsta dörrar');
+                        updateKeyHUD();
+                        break;
+                    case 'keycard_blue':
+                        state.keys.add('blue');
+                        playSound('weaponPickup');
+                        showMessage('BLÅTT NYCKELKORT!', 'Öppnar blåa låsta dörrar');
+                        updateKeyHUD();
+                        break;
                 }
                 updateUI();
             }
@@ -1214,6 +1306,120 @@ function animate() {
     }
 
     doors.forEach(function(d) { d.mesh.position.y = Math.lerp(d.mesh.position.y, d.open ? 6 : 2, 5 * dt); });
+
+    // ── Secret walls: slide open when revealed ────────────────────────────────
+    secretWalls.forEach(function(sw) {
+        if (sw.revealed) {
+            sw.mesh.position.y = Math.lerp(sw.mesh.position.y, 6, 3 * dt);
+        }
+    });
+
+    // ── Toxic zones: damage player on contact ─────────────────────────────────
+    if (state.playing && !state.dead) {
+        for (var ti = 0; ti < toxicZones.length; ti++) {
+            var tz = toxicZones[ti];
+            var tdx = camera.position.x - tz.x;
+            var tdz = camera.position.z - tz.z;
+            if (Math.abs(tdx) < 0.9 && Math.abs(tdz) < 0.9) {
+                tz._dmgTimer -= dt;
+                if (tz._dmgTimer <= 0) {
+                    state.health -= 5;
+                    tz._dmgTimer = 0.5;
+                    updateUI();
+                    if (!tz._shown) {
+                        tz._shown = true;
+                        showMessage('GIFTIGT!', 'Spring ur det giftiga området!');
+                    }
+                    if (state.health <= 0 && !state.dead) { playerDied(); }
+                }
+                // Pulsing green overlay hint
+                tz.mesh.material.emissiveIntensity = 0.4 + Math.sin(time * 8) * 0.3;
+            } else {
+                tz._shown = false;
+                tz.mesh.material.emissiveIntensity = 0.7;
+            }
+        }
+    }
+
+    // ── Crushers: animate and damage player ───────────────────────────────────
+    for (var ci = 0; ci < crushers.length; ci++) {
+        var cr = crushers[ci];
+        var cyc = ((time + cr.phase) % cr.period) / cr.period; // 0..1 cycle
+        // Triangle wave: 0→1→0, minimum at 0.4-0.6 (crushing position)
+        var frac = cyc < 0.5 ? cyc * 2 : (1 - cyc) * 2;
+        cr.mesh.position.y = 0.4 + frac * 3.5; // 0.4 = crushing, 3.9 = at ceiling
+
+        if (state.playing && !state.dead) {
+            cr._dmgCooldown = Math.max(0, cr._dmgCooldown - dt);
+            var cdx = camera.position.x - cr.x;
+            var cdz = camera.position.z - cr.z;
+            if (Math.abs(cdx) < 0.85 && Math.abs(cdz) < 0.85 && frac < 0.2) {
+                if (cr._dmgCooldown <= 0) {
+                    state.health -= 25;
+                    cr._dmgCooldown = 0.8;
+                    playSound('damage');
+                    showMessage('KROSSAS!', 'Spring undan pressar!');
+                    updateUI();
+                    if (state.health <= 0 && !state.dead) { playerDied(); }
+                }
+            }
+        }
+    }
+
+    // ── Alarm panels: auto-trigger on proximity + blink ───────────────────────
+    for (var ai = 0; ai < alarmPanels.length; ai++) {
+        var ap = alarmPanels[ai];
+        if (!ap.active) continue;
+
+        // Blink the light
+        ap._blinkTimer = (ap._blinkTimer || 0) + dt;
+        ap.lightMesh.material.emissiveIntensity = Math.abs(Math.sin(ap._blinkTimer * 4)) * 0.8 + 0.2;
+
+        if (state.playing && !state.dead && !ap.triggered) {
+            var adx = camera.position.x - ap.x;
+            var adz = camera.position.z - ap.z;
+            if (Math.sqrt(adx*adx + adz*adz) < 2.5) {
+                ap.triggered = true;
+                ap.active = false;
+                ap.lightMesh.material.emissiveIntensity = 1.5;
+                ap.lightMesh.material.color.setHex(0xff4400);
+                playSound('alarm');
+                showMessage('LARM!', 'Alla fiender alertas!');
+                // Alert all enemies
+                enemies.forEach(function(e) {
+                    if (e.state === 'patrol' || e.state === 'idle') e.state = 'chase';
+                });
+                // Spawn additional enemies near alarm panel
+                ap.spawnEnemies.forEach(function(etype, idx) {
+                    var isBoss = ['jimmie', 'ebba', 'ulf', 'lars_werner'].includes(etype);
+                    var hp = isBoss ? 100 : [30,40,50,60,70,80][state.level] || 50;
+                    var mat2 = new THREE.MeshStandardMaterial({ color: 0x888888, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+                    var geom2 = new THREE.PlaneGeometry(3, 3);
+                    var mesh2 = new THREE.Mesh(geom2, mat2);
+                    var ox = (idx % 2 === 0 ? 2 : -2);
+                    mesh2.position.set(ap.x + ox, 1.5, ap.z + (idx > 1 ? 2 : -2));
+                    scene.add(mesh2);
+                    enemies.push({
+                        mesh: mesh2, type: etype, hp, variant: Math.floor(Math.random()*10),
+                        state: 'chase',
+                        stateTimer: 0,
+                        patrolOriginX: mesh2.position.x, patrolOriginZ: mesh2.position.z,
+                        patrolTargetX: mesh2.position.x, patrolTargetZ: mesh2.position.z,
+                        patrolPause: 0, footstepTimer: 0, alertCooldown: 0
+                    });
+                    // Deferred texture load
+                    setTimeout(function() {
+                        if (mesh2 && mesh2.material) {
+                            mesh2.material.map = createEnemyTexture(etype, 'idle', 0);
+                            mesh2.material.needsUpdate = true;
+                        }
+                    }, 100 + idx * 50);
+                });
+                state.levelStartEnemyCount = enemies.length;
+            }
+        }
+    }
+
     for (var si = activeSlogans.length - 1; si >= 0; si--) {
         activeSlogans[si].life -= dt; activeSlogans[si].sprite.position.y += 0.5 * dt;
         if (activeSlogans[si].life <= 0) { scene.remove(activeSlogans[si].sprite); activeSlogans.splice(si, 1); }
