@@ -25,6 +25,7 @@ const state = {
     kills: 0, shotsFired: 0, shotsHit: 0, gameTime: 0, playing: false,
     armor: 0, speedBoost: 0, combo: 0, comboTimer: 0, score: 0,
     ammoType: 0, ngPlus: false,
+    lives: 3,
     // Mission tracking
     levelStartEnemyCount: 0,
     levelKills: 0,
@@ -347,7 +348,7 @@ document.getElementById('startBtn').addEventListener('click', () => {
     toRemove.forEach(function(obj) { scene.remove(obj); });
     document.getElementById('overlay').style.display = 'none';
     initAudio(); state.kills = 0; state.shotsFired = 0; state.shotsHit = 0;
-    state.gameTime = 0; state.level = 0; state.weapon = 1; state.inventory = [1];
+    state.gameTime = 0; state.level = 0; state.weapon = 1; state.inventory = [1]; state.lives = 3;
     buildGunModel(1);
     // Show briefing for level 0 before starting
     window.showMissionBriefing();
@@ -914,6 +915,33 @@ function updateDamageIndicator(dt) {
 }
 
 function playerDied() {
+    if (state.dead) return; // guard mot dubbel-trigger
+    state.lives--;
+    updateLivesHUD();
+    if (state.lives > 0) {
+        // Respawn: behåll vapen, ladda om nivån
+        state.dead = true; // blockera re-trigger under delay
+        playSound('playerHurt');
+        _dom.vig.style.background = 'rgba(255,0,0,0.8)';
+        showMessage('LIV FÖRLORAT!', state.lives + ' ' + (state.lives === 1 ? 'liv kvar' : 'liv kvar'));
+        var savedInventory = state.inventory.slice();
+        var savedWeapon = state.weapon;
+        setTimeout(function() {
+            _dom.vig.style.background = 'none';
+            _dom.vig.style.boxShadow = 'inset 0 0 100px rgba(0,0,0,0.8)';
+            loadLevel(state.level);
+            state.inventory = savedInventory;
+            state.weapon = savedWeapon;
+            state.dead = false;
+            state.playing = true;
+            buildGunModel(savedWeapon);
+            controls.lock();
+            startMusic('exploration');
+            startAmbient();
+        }, 1800);
+        return;
+    }
+    // Game over — inga liv kvar
     state.dead = true; state.playing = false; playSound('gameOver'); stopMusic(); stopAmbient();
     _dom.vig.style.background = 'rgba(255,0,0,0.5)';
     document.getElementById('deathStats').innerHTML = getStatsHTML();
@@ -944,7 +972,7 @@ window.showMenu = function() {
 window.startNewGamePlus = function() {
     document.getElementById('winScreen').style.display = 'none';
     state.ngPlus = true; state.level = 0;
-    state.health = 100; state.ammo = 50; state.armor = 50;
+    state.health = 100; state.ammo = 50; state.armor = 50; state.lives = 3;
     state.kills = 0; state.shotsFired = 0; state.shotsHit = 0; state.gameTime = 0; state.score = 0;
     window.showMissionBriefing();
 };
@@ -966,9 +994,18 @@ var _dom = {
     dmgTop: document.getElementById('dmg-top'),
     dmgRight: document.getElementById('dmg-right'),
     dmgBottom: document.getElementById('dmg-bottom'),
-    dmgLeft: document.getElementById('dmg-left')
+    dmgLeft: document.getElementById('dmg-left'),
+    lives: document.getElementById('lives-display')
 };
 var _mmCtx = _dom.mmCvs.getContext('2d');
+
+function updateLivesHUD() {
+    if (!_dom.lives) return;
+    var hearts = '';
+    for (var _li = 0; _li < 3; _li++) hearts += _li < state.lives ? '♥' : '♡';
+    _dom.lives.textContent = 'LIV: ' + hearts;
+    _dom.lives.style.color = state.lives === 1 ? '#f44' : '#f0f';
+}
 var _minimapFrame = 0;
 var _compassFrame = 0;
 var _wn = { 1: 'PISTOL', 2: 'KULSPRUTA', 3: 'HAGELGEVÄR', 4: 'FOLKVETT' };
@@ -984,6 +1021,7 @@ function updateUI() {
     if (_dom.armor) { _dom.armor.style.display = state.armor > 0 ? 'block' : 'none'; _dom.armor.textContent = 'ARMOR: ' + Math.ceil(state.armor); }
     if (_dom.score) _dom.score.textContent = 'POÄNG: ' + state.score;
     if (_dom.combo) _dom.combo.textContent = state.combo >= 2 ? 'COMBO x' + state.combo : '';
+    updateLivesHUD();
 
     // Compass — throttled to every 3rd frame
     _compassFrame++;
@@ -1118,6 +1156,16 @@ function animate() {
                         state.weapon = 4; buildGunModel(4);
                         state.secretFound = true;
                         playSound('weaponPickup'); showMessage('FOLKVETT-BROSCHYR!', 'Hemligt föremål hittat! +500p'); break;
+                    case 'extralife':
+                        if (state.lives < 3) {
+                            state.lives = Math.min(3, state.lives + 1);
+                            playSound('pickup'); showMessage('EXTRA LIV!', '♥ ' + state.lives + ' liv totalt'); updateLivesHUD();
+                        } else {
+                            // Max lives — ge poäng istället
+                            state.score += 500;
+                            playSound('pickup'); showMessage('EXTRA LIV!', 'Redan max — +500 poäng');
+                        }
+                        break;
                 }
                 updateUI();
             }

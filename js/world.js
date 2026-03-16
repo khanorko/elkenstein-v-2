@@ -100,7 +100,8 @@ export const LEVELS = [
             { type: 'ammo', x: 3, z: 5 },
             { type: 'health', x: 12, z: 17 },
             { type: 'semla', x: 17, z: 11 },
-            { type: 'coffee', x: 6, z: 6 }
+            { type: 'coffee', x: 6, z: 6 },
+            { type: 'extralife', x: 18, z: 18 }
         ],
         barrelData: [
             { x: 9, z: 7 },
@@ -410,7 +411,7 @@ export function buildLevel(levelIndex, scene) {
     if (lv.pickupData) {
         lv.pickupData.forEach(pd => {
             const pickupGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
-            const pickupColors = { health: 0x00ff00, ammo: 0xffcc00, machinegun: 0x8888ff, shotgun: 0xff8800, armor: 0x4444ff, coffee: 0x663300, semla: 0xffdd88, folkvett: 0xccccff };
+            const pickupColors = { health: 0x00ff00, ammo: 0xffcc00, machinegun: 0x8888ff, shotgun: 0xff8800, armor: 0x4444ff, coffee: 0x663300, semla: 0xffdd88, folkvett: 0xccccff, extralife: 0xff00ff };
             let color = pickupColors[pd.type] || 0xffffff;
             const pickupMat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.3 });
             const mesh = new THREE.Mesh(pickupGeo, pickupMat);
