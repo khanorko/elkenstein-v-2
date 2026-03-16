@@ -111,6 +111,13 @@ function loadLevel(index) {
     if (missionEl) missionEl.textContent = levelMissions[index] || '- Besegra alla fiender';
     showMessage(LEVELS[index].name, LEVELS[index].subtitle);
 
+    // Tutorial hints på level 0
+    if (index === 0) {
+        setTimeout(function() { showMessage('TIPS', 'WASD = rör dig, mus = sikta, klick = skjut'); }, 2500);
+        setTimeout(function() { showMessage('TIPS', 'E/SPACE = öppna dörrar, 1-4 = byt vapen'); }, 6000);
+        setTimeout(function() { showMessage('TIPS', 'Hitta utgången (E) för att klara nivån'); }, 10000);
+    }
+
     // Collect deferred texture tasks: wall decorations + enemy textures
     const decoTypes = ['swedish', 'nydemokrati', 'ultima_thule', 'valstuga', 'demokrati', 'foliehatt', 'jarnror_prop'];
     const deferredTasks = [];
@@ -988,6 +995,7 @@ var _dom = {
     armor: document.getElementById('armor-display'),
     score: document.getElementById('score-text'),
     combo: document.getElementById('combo-text'),
+    timer: document.getElementById('timer-display'),
     compass: document.getElementById('compass-strip'),
     mmCvs: document.getElementById('minimap-canvas'),
     vig: document.getElementById('vignette'),
@@ -1022,6 +1030,14 @@ function updateUI() {
     if (_dom.score) _dom.score.textContent = 'POÄNG: ' + state.score;
     if (_dom.combo) _dom.combo.textContent = state.combo >= 2 ? 'COMBO x' + state.combo : '';
     updateLivesHUD();
+    // Level timer
+    if (_dom.timer) {
+        var _lt = Math.floor(state.levelTime);
+        var _lm = Math.floor(_lt / 60), _ls = _lt % 60;
+        var _parT = (LEVELS[state.level] && LEVELS[state.level].parTime) || 120;
+        _dom.timer.textContent = 'TID: ' + _lm + ':' + (_ls < 10 ? '0' : '') + _ls;
+        _dom.timer.style.color = state.levelTime > _parT ? '#f66' : '#aaf';
+    }
 
     // Compass — throttled to every 3rd frame
     _compassFrame++;

@@ -26,14 +26,11 @@ export const LEVELS = [
             "#..P...........#",
             "################",
         ],
+        // Level 1 — Tutorial: 4 svaga fiender, ingen boss
         enemyData: [
             { type: 'bss_retro', x: 14, z: 2 },
             { type: 'jarnror', x: 5, z: 5 },
             { type: 'sd', x: 12, z: 10 },
-            { type: 'ian_bert', x: 8, z: 3, variant: 0 },
-            { type: 'ian_bert', x: 10, z: 3, variant: 1 },
-            { type: 'lars_werner', x: 2, z: 2 },
-            { type: 'nmr_elite', x: 14, z: 13 },
             { type: 'm_retro', x: 1, z: 5 }
         ],
         propData: [
@@ -87,21 +84,22 @@ export const LEVELS = [
             "#..................#",
             "####################",
         ],
+        // Level 2 — 6 fiender, intro shotgun (ingen boss än)
         enemyData: [
-            { type: 'ebba', x: 5, z: 8 },
             { type: 'sd', x: 17, z: 3 },
+            { type: 'sd', x: 5, z: 15 },
             { type: 'pressekreterare', x: 10, z: 2 },
             { type: 'opinionsbildare', x: 14, z: 14 },
-            { type: 'troll', x: 3, z: 17 }
+            { type: 'troll', x: 3, z: 17 },
+            { type: 'bss_retro', x: 8, z: 6 }
         ],
         pickupData: [
-            { type: 'machinegun', x: 15, z: 10 },
+            { type: 'shotgun', x: 15, z: 10 },  // Introducerar shotgun
             { type: 'health', x: 8, z: 14 },
             { type: 'ammo', x: 3, z: 5 },
             { type: 'health', x: 12, z: 17 },
-            { type: 'semla', x: 17, z: 11 },
             { type: 'coffee', x: 6, z: 6 },
-            { type: 'extralife', x: 18, z: 18 }
+            { type: 'extralife', x: 17, z: 17 }
         ],
         barrelData: [
             { x: 9, z: 7 },
@@ -135,24 +133,22 @@ export const LEVELS = [
             "#..P.................#",
             "######################",
         ],
+        // Level 3 — Första boss: Jimmie Åkesson. Ammo knapphändigt.
         enemyData: [
             { type: 'jimmie', x: 10, z: 10 },
-            { type: 'ulf', x: 14, z: 15 },
             { type: 'sd', x: 5, z: 2 },
-            { type: 'sd', x: 16, z: 9 }
+            { type: 'sd', x: 16, z: 9 },
+            { type: 'troll', x: 2, z: 14 }
         ],
         vendingMachineData: [
             { x: 2, z: 2 },
             { x: 19, z: 19 }
         ],
         pickupData: [
-            { type: 'shotgun', x: 3, z: 12 },
+            { type: 'machinegun', x: 3, z: 12 },  // Belöning för att nå boss-arenan
             { type: 'health', x: 18, z: 6 },
-            { type: 'ammo', x: 8, z: 2 },
-            { type: 'health', x: 15, z: 12 },
-            { type: 'ammo', x: 6, z: 15 },
-            { type: 'armor', x: 12, z: 2 },
-            { type: 'semla', x: 19, z: 14 }
+            { type: 'ammo', x: 8, z: 2 },          // Sparsamt ammo
+            { type: 'armor', x: 12, z: 2 }
         ],
         barrelData: [
             { x: 7, z: 9 },
@@ -393,9 +389,12 @@ export function buildLevel(levelIndex, scene) {
         mesh.receiveShadow = false;
         scene.add(mesh);
 
-        const isBoss = ['jimmie', 'ebba', 'ulf'].includes(ed.type);
+        const isBoss = ['jimmie', 'ebba', 'ulf', 'lars_werner'].includes(ed.type);
+        // HP scales with level index: weak enemies grow 30→80, bosses grow 80→200
+        const _normalHp = [30, 40, 50, 60, 70, 80][levelIndex] || 50;
+        const _bossHp   = [80, 100, 120, 140, 160, 200][levelIndex] || 100;
         enemies.push({
-            mesh: mesh, type: ed.type, hp: isBoss ? 100 : 50, variant: variant,
+            mesh: mesh, type: ed.type, hp: isBoss ? _bossHp : _normalHp, variant: variant,
             state: isBoss ? 'idle' : 'patrol',
             stateTimer: 0,
             patrolOriginX: ed.x * 2, patrolOriginZ: ed.z * 2,
