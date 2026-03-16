@@ -1911,4 +1911,17 @@ function updateArcadeMode() {
     }
 }
 
-animate();
+// Startup: let browser paint loading screen before first (shader-compiling) render
+(function() {
+    var _sl = document.getElementById('startup-loading');
+    var _sm = document.getElementById('startup-msg');
+    requestAnimationFrame(function() {
+        // Browser has painted "INITIERAR GRAFIK..." — now start render loop
+        // First animate() call compiles shaders (brief freeze here, not blank screen)
+        animate();
+        requestAnimationFrame(function() {
+            // First frame done — remove loading overlay
+            if (_sl) _sl.style.display = 'none';
+        });
+    });
+})();
