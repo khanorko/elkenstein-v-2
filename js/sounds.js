@@ -303,57 +303,149 @@ export function playSound(name) {
             playOsc('square', 100, 50, 0.1, 0.15);
             playOsc('sawtooth', 150, 80, 0.05, 0.1);
             break;
+
+        case 'alarm':
+            playOsc('square', 800, 400, 0.2, 0.15);
+            playOsc('square', 400, 800, 0.2, 0.15, 0.15);
+            playOsc('square', 800, 400, 0.15, 0.15, 0.3);
+            playNoise(0.1, 0.1, 2000, 3, 0.05);
+            break;
+
+        case 'damage':
+            playOsc('sawtooth', 250, 80, 0.2, 0.15);
+            playNoise(0.15, 0.1, 1200, 2, 0.02);
+            playOsc('sine', 100, 40, 0.12, 0.2, 0.05);
+            break;
     }
 }
 
-// --- AMBIENT MUSIC ---
+// --- AMBIENT MUSIC (layered system) ---
 let musicOscillators = [];
 let musicGain = null;
 let musicPlaying = false;
+let musicIntervals = [];
+
+function playMusicNote(freq, type, vol, dur, delay = 0) {
+    const ctx = ensureAudio();
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    const t = ctx.currentTime + delay;
+    osc.frequency.setValueAtTime(freq, t);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.05);
+    g.gain.setValueAtTime(vol, t + dur * 0.6);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    osc.connect(g); g.connect(musicGain);
+    osc.start(t); osc.stop(t + dur + 0.01);
+    musicOscillators.push(osc);
+}
 
 export function startMusic(mode = 'exploration') {
     if (musicPlaying) stopMusic();
     const ctx = ensureAudio();
     musicGain = ctx.createGain();
-    musicGain.gain.value = 0.06;
+    musicGain.gain.value = 0.07;
     musicGain.connect(ctx.destination);
+    musicPlaying = true;
 
-    const notes = {
-        exploration: [65.41, 82.41, 98.00, 73.42], // C2, E2, G2, D2
-        combat: [55.00, 69.30, 82.41, 110.00],      // A1, C#2, E2, A2
-        boss: [49.00, 61.74, 73.42, 98.00]           // G1, B1, D2, G2
+    // Chord progressions (root frequencies)
+    const progressions = {
+        exploration: [
+            [65.41, 82.41, 98.00],  // Cm (C E G)
+            [73.42, 87.31, 110.0],  // Dm (D F A)
+            [55.00, 65.41, 82.41],  // Am (A C E)
+            [61.74, 73.42, 92.50]   // Bb (Bb D F)
+        ],
+        combat: [
+            [55.00, 65.41, 82.41],  // Am
+            [49.00, 61.74, 73.42],  // G
+            [58.27, 73.42, 87.31],  // Bbm
+            [55.00, 69.30, 82.41]   // A (major for tension)
+        ],
+        boss: [
+            [49.00, 58.27, 73.42],  // Gm
+            [46.25, 55.00, 65.41],  // F#dim
+            [55.00, 65.41, 82.41],  // Am
+            [51.91, 61.74, 77.78]   // Ab
+        ]
     };
 
-    const seq = notes[mode] || notes.exploration;
-    let step = 0;
+    const chords = progressions[mode] || progressions.exploration;
+    let chordIdx = 0;
+    let beatInChord = 0;
+    const beatsPerChord = mode === 'combat' ? 4 : mode === 'boss' ? 6 : 8;
+    const bpm = mode === 'combat' ? 140 : mode === 'boss' ? 100 : 80;
+    const beatMs = 60000 / bpm;
 
-    function playStep() {
+    function playBeat() {
         if (!musicPlaying) return;
-        const freq = seq[step % seq.length];
-        const osc = ctx.createOscillator();
-        osc.type = 'sine';
-        osc.frequency.value = freq;
-        const g = ctx.createGain();
-        g.gain.setValueAtTime(0.06, ctx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
-        osc.connect(g); g.connect(musicGain);
-        osc.start(); osc.stop(ctx.currentTime + 0.9);
-        musicOscillators.push(osc);
-        step++;
+        const chord = chords[chordIdx % chords.length];
+        const root = chord[0];
+
+        // Bass: play root on beat 0, octave up on beat 2
+        if (beatInChord === 0) {
+            playMusicNote(root, 'sine', 0.06, beatMs * 2 / 1000);
+            playMusicNote(root, 'triangle', 0.03, beatMs * 2 / 1000);
+        } else if (beatInChord === 2 && mode !== 'exploration') {
+            playMusicNote(root * 2, 'sine', 0.04, beatMs / 1000);
+        }
+
+        // Pad: soft chord tones on every other beat
+        if (beatInChord % 2 === 0) {
+            chord.forEach((f, i) => {
+                playMusicNote(f * 2, 'sine', 0.015, beatMs * 2 / 1000, i * 0.02);
+            });
+        }
+
+        // Melody: sparse, moody single notes
+        if (mode === 'combat') {
+            // Aggressive eighth-note pulse
+            if (beatInChord % 1 === 0) {
+                var mFreq = chord[beatInChord % chord.length] * 4;
+                if (Math.random() > 0.4) playMusicNote(mFreq, 'sawtooth', 0.02, beatMs * 0.8 / 1000);
+            }
+        } else if (mode === 'boss') {
+            // Ominous descending pattern
+            if (beatInChord < 3) {
+                var bFreq = root * (4 - beatInChord * 0.5);
+                playMusicNote(bFreq, 'square', 0.015, beatMs * 1.5 / 1000, 0.05);
+            }
+        } else {
+            // Exploration: sparse melodic hits
+            if (beatInChord === 0 || beatInChord === 3 || beatInChord === 5) {
+                var eFreq = chord[Math.floor(Math.random() * chord.length)] * 4;
+                playMusicNote(eFreq, 'sine', 0.025, beatMs * 1.5 / 1000);
+            }
+        }
+
+        // Percussion: noise hits
+        if (mode === 'combat') {
+            if (beatInChord % 2 === 0) playNoise(0.06, 0.03, 100, 1);
+            if (beatInChord % 2 === 1) playNoise(0.03, 0.015, 6000, 8);
+        } else if (mode === 'boss') {
+            if (beatInChord === 0) playNoise(0.08, 0.05, 80, 1);
+            if (beatInChord === 3) playNoise(0.04, 0.02, 4000, 5);
+        }
+
+        beatInChord++;
+        if (beatInChord >= beatsPerChord) { beatInChord = 0; chordIdx++; }
     }
 
-    musicPlaying = true;
-    playStep();
-    const interval = setInterval(() => {
-        if (!musicPlaying) { clearInterval(interval); return; }
-        playStep();
-    }, 900);
+    playBeat();
+    var iv = setInterval(() => {
+        if (!musicPlaying) { clearInterval(iv); return; }
+        playBeat();
+    }, beatMs);
+    musicIntervals.push(iv);
 }
 
 export function stopMusic() {
     musicPlaying = false;
     musicOscillators.forEach(o => { try { o.stop(); } catch(e) {} });
     musicOscillators = [];
+    musicIntervals.forEach(iv => clearInterval(iv));
+    musicIntervals = [];
 }
 
 // --- AMBIENT SYSTEM ---

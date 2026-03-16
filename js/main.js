@@ -3,7 +3,6 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { buildLevel, LEVELS } from './world.js';
 import { createEnemyTexture, createWallDecoration } from './assets.js';
 import { playSound, initAudio, startMusic, stopMusic, startAmbient, stopAmbient, playPositionalSound, setReverb } from './sounds.js';
@@ -43,18 +42,6 @@ const state = {
     modifiers: { bigHead: false, fastEnemies: false, pistolOnly: false }
 };
 
-const CRTShader = {
-    uniforms: { "tDiffuse": { value: null }, "time": { value: 0 } },
-    vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    // Simplified: removed RGB separation (chromatic aberration) — saves 2 texture fetches/pixel
-    fragmentShader: `uniform sampler2D tDiffuse; uniform float time; varying vec2 vUv;
-        void main() { vec2 uv = vUv;
-            float scanline = sin(uv.y * 800.0 + time * 10.0) * 0.04;
-            vec3 col = texture2D(tDiffuse, uv).rgb;
-            float vig = (0.8 + 0.2*16.0*uv.x*uv.y*(1.0-uv.x)*(1.0-uv.y));
-            gl_FragColor = vec4(col * vig - scanline, 1.0); }`
-};
-
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
@@ -67,9 +54,8 @@ document.body.appendChild(renderer.domElement);
 const renderScene = new RenderPass(scene, camera);
 var halfRes = new THREE.Vector2(Math.floor(window.innerWidth / 2), Math.floor(window.innerHeight / 2));
 const bloomPass = new UnrealBloomPass(halfRes, 0.5, 0.4, 0.85);
-const crtPass = new ShaderPass(CRTShader);
 const composer = new EffectComposer(renderer);
-composer.addPass(renderScene); composer.addPass(bloomPass); composer.addPass(crtPass);
+composer.addPass(renderScene); composer.addPass(bloomPass);
 
 // Quality selector: LOW=0, MED=1, HIGH=2
 // Bloom is expensive — off by default on Safari
@@ -119,13 +105,13 @@ function loadLevel(index) {
     // Reset per-level scoring fields
     state.damageTaken = 0; state.maxCombo = 0;
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.8); scene.add(ambient);
-    const playerLight = new THREE.PointLight(0xffffff, 20, 20);
+    const ambient = new THREE.AmbientLight(0xffffff, 1.2); scene.add(ambient);
+    const playerLight = new THREE.PointLight(0xffffff, 25, 25);
     playerLight.position.set(0, 0, 0); playerLight.castShadow = true;
     playerLight.shadow.mapSize.width = 256; playerLight.shadow.mapSize.height = 256;
     camera.add(playerLight);
     scene.add(gunLight); gunLight.castShadow = true; scene.add(camera);
-    scene.fog = new THREE.FogExp2(LEVELS[index].sky, 0.03);
+    scene.fog = new THREE.FogExp2(LEVELS[index].sky, 0.015);
     scene.background = new THREE.Color(LEVELS[index].sky);
 
     rebuildCollisionCache();
@@ -924,13 +910,13 @@ function updateEnemy(e, dt, time) {
         _ePos.copy(e.mesh.position).add(_eVec2);
         if (!checkCollision(_ePos, 0.5)) e.mesh.position.copy(_ePos);
         e.mesh.rotation.y += 8 * dt;
-        if (dist < 2.5) {
+        if (dist < 2.5 && !state.dead) {
             var rawDmg = 15 * dt;
             if (state.armor > 0) { var abs = Math.min(state.armor, rawDmg * 0.7); state.armor -= abs; rawDmg -= abs; }
             state.health -= rawDmg; state.damageTaken += rawDmg;
             state.missionBossNoDamage = false;
             if (Math.random() > 0.95) spawnSlogan(e.mesh.position, 'ebba');
-            if (state.health <= 0 && !state.dead) playerDied();
+            if (state.health <= 0) playerDied();
         }
         return;
     }
@@ -1042,7 +1028,7 @@ function updateEnemy(e, dt, time) {
         }
     }
 
-    if (dist < 1.5) {
+    if (dist < 1.5 && !state.dead) {
         e.state = 'chase';
         var rawDmg = 10 * dt;
         if (state.armor > 0) { var absorbed = Math.min(state.armor, rawDmg * 0.7); state.armor -= absorbed; rawDmg -= absorbed; }
@@ -1051,7 +1037,7 @@ function updateEnemy(e, dt, time) {
         if (Math.random() > 0.95) { playSound('damageHit'); showDamageDirection(e.mesh.position); }
         _dom.vig.style.boxShadow = state.health < 30 ? 'inset 0 0 100px rgba(255,0,0,0.5)' : 'inset 0 0 100px rgba(0,0,0,0.8)';
         if (Math.random() > 0.98) spawnSlogan(e.mesh.position, e.type);
-        if (state.health <= 0 && !state.dead) playerDied();
+        if (state.health <= 0) playerDied();
     }
 }
 
@@ -1271,7 +1257,6 @@ function updateUI() {
 function animate() {
     requestAnimationFrame(animate);
     var dt = clock.getDelta(); var time = clock.getElapsedTime();
-    crtPass.uniforms.time.value = time;
 
     // Menu 3D animation
     if (menuActive) {
@@ -1590,19 +1575,20 @@ function animate() {
     }
 
     // AI budget: sort by distance, run full AI only on nearest MAX_ACTIVE_AI enemies
-    var MAX_ACTIVE_AI = 6;
-    var _eiSorted = enemies.slice().sort(function(a, b) {
-        return a.mesh.position.distanceTo(camera.position) - b.mesh.position.distanceTo(camera.position);
-    });
-    for (var _ei = 0; _ei < _eiSorted.length; _ei++) {
-        var _e = _eiSorted[_ei];
-        if (_ei < MAX_ACTIVE_AI) {
-            // Full AI update (includes lookAt billboard)
-            updateEnemy(_e, dt, time);
-        } else {
-            // Cheap: just keep sprite facing camera, skip all AI logic
-            _eLook.set(camera.position.x, _e.mesh.position.y, camera.position.z);
-            _e.mesh.lookAt(_eLook);
+    // Skip all AI when player is dead to prevent freeze
+    if (!state.dead) {
+        var MAX_ACTIVE_AI = 6;
+        var _eiSorted = enemies.slice().sort(function(a, b) {
+            return a.mesh.position.distanceTo(camera.position) - b.mesh.position.distanceTo(camera.position);
+        });
+        for (var _ei = 0; _ei < _eiSorted.length; _ei++) {
+            var _e = _eiSorted[_ei];
+            if (_ei < MAX_ACTIVE_AI) {
+                updateEnemy(_e, dt, time);
+            } else {
+                _eLook.set(camera.position.x, _e.mesh.position.y, camera.position.z);
+                _e.mesh.lookAt(_eLook);
+            }
         }
     }
     updateDamageIndicator(dt);
@@ -1796,8 +1782,8 @@ function generateArcadeArena() {
     rebuildCollisionCache();
 
     // Lights
-    var ambient = new THREE.AmbientLight(0xffffff, 0.6); scene.add(ambient);
-    var playerLight = new THREE.PointLight(0xffffff, 20, 20);
+    var ambient = new THREE.AmbientLight(0xffffff, 1.0); scene.add(ambient);
+    var playerLight = new THREE.PointLight(0xffffff, 25, 25);
     playerLight.castShadow = true;
     playerLight.shadow.mapSize.width = 256; playerLight.shadow.mapSize.height = 256;
     camera.add(playerLight);
@@ -1808,7 +1794,7 @@ function generateArcadeArena() {
         aLight.position.set(5 + li * 7, 2, 10 + (li % 2) * 4);
         scene.add(aLight);
     }
-    scene.fog = new THREE.FogExp2(0x001100, 0.04);
+    scene.fog = new THREE.FogExp2(0x001100, 0.02);
     scene.background = new THREE.Color(0x001100);
 
     camera.position.set(W, 1.6, H);
