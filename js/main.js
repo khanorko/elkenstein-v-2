@@ -602,13 +602,12 @@ function doShoot() {
     var fl = gunGroup.getObjectByName('flash');
     if (fl) { fl.material.opacity = 1; fl.rotation.z = Math.random() * Math.PI; }
     gunGroup.position.z = 0.15; gunGroup.rotation.x = 0.1; shootCooldown = wp.cooldown;
-    // Build enemy mesh array + lookup once per shot (avoids map()/find() per pellet)
+    // Build all mesh arrays + Maps once per shot (not per pellet)
     var _emArr = []; var _emMap = new Map();
     for (var _emi = 0; _emi < enemies.length; _emi++) {
         _emArr[_emi] = enemies[_emi].mesh;
         _emMap.set(enemies[_emi].mesh, enemies[_emi]);
     }
-    // Build all mesh arrays + Maps once per shot (not per pellet) — avoids repeated filter/map/find
     var _secretMeshes = [];
     for (var _smi = 0; _smi < secretWalls.length; _smi++) {
         if (!secretWalls[_smi].revealed) _secretMeshes.push(secretWalls[_smi].mesh);
@@ -623,7 +622,7 @@ function doShoot() {
     // Prop meshes + map
     var _propArr = []; var _propMap = new Map();
     for (var _pi2 = 0; _pi2 < props.length; _pi2++) { _propArr.push(props[_pi2].mesh); _propMap.set(props[_pi2].mesh, props[_pi2]); }
-    // Vending machine meshes + map (including children)
+    // Vending machine meshes + map (including children for recursive hits)
     var _vendArr = []; var _vendMap = new Map();
     for (var _vi = 0; _vi < vendingMachines.length; _vi++) {
         if (vendingMachines[_vi].active) {
@@ -632,16 +631,21 @@ function doShoot() {
             vendingMachines[_vi].mesh.children.forEach(function(c) { _vendMap.set(c, vendingMachines[_vi]); });
         }
     }
+    // Combined per-pellet list: enemies + walls (ONE raycast per pellet instead of two)
+    var _pelletTargets = _emArr.concat(_wallHitMeshes);
 
     var pellets = wp.pellets || 1; var hit = false;
     for (var p = 0; p < pellets; p++) {
         var extraSpread = state.ammoType === 1 ? 0.04 : 0; // Hålspets has more spread
         _shootSpread.set((Math.random()-0.5)*(wp.spread+extraSpread), (Math.random()-0.5)*(wp.spread+extraSpread));
         _shootRC.setFromCamera(_shootSpread, camera);
-        var eh = _shootRC.intersectObjects(_emArr);
-        if (eh.length > 0 && eh[0].distance < 20) {
-            var en = _emMap.get(eh[0].object);
-            if (en) {
+        // Single raycast against combined enemies+walls — closest hit wins (physically correct)
+        var ph = _shootRC.intersectObjects(_pelletTargets);
+        if (ph.length > 0) {
+            var closest = ph[0];
+            var en = _emMap.get(closest.object);
+            if (en && closest.distance < 20) {
+                // Enemy hit
                 var dmg = wp.damage; if (en.state === 'debate') dmg *= 2;
                 // Ammo type modifiers
                 if (state.ammoType === 1) dmg = Math.round(dmg * 1.5); // Hålspets
@@ -651,11 +655,11 @@ function doShoot() {
                     _shootDir.subVectors(camera.position, en.mesh.position).normalize();
                     _shootTmpVec.set(0, 0, -1).applyQuaternion(en.mesh.quaternion);
                     if (_shootDir.dot(_shootTmpVec) > -0.3) { // Facing player = shielded
-                        spawnParticles(eh[0].point, 0x4444ff, 8); playSound('emptyClick');
+                        spawnParticles(closest.point, 0x4444ff, 8); playSound('emptyClick');
                         continue; // Shield blocks
                     }
                 }
-                en.hp -= dmg; hit = true; spawnParticles(eh[0].point, 0xff0000, 15);
+                en.hp -= dmg; hit = true; spawnParticles(closest.point, 0xff0000, 15);
                 playSound(Math.random() > 0.4 ? 'enemyGrunt' : 'enemyHurt');
                 var v = en.variant || 0;
                 en.mesh.material.map = createEnemyTexture(en.type, 'hurt', v);
@@ -669,15 +673,12 @@ function doShoot() {
                     addCombo();
                     addKillFeed(en.type.toUpperCase().replace('_', ' ') + ' eliminerad');
                 }
-            }
-        } else {
-            var wh = _shootRC.intersectObjects(_wallHitMeshes);
-            if (wh.length > 0 && wh[0].distance < 30) {
-                // Check if hit a secret wall
-                var hitSW = secretWalls.find(function(sw) { return !sw.revealed && sw.mesh === wh[0].object; });
+            } else if (closest.distance < 30) {
+                // Wall hit (enemy miss or out of range)
+                var hitSW = secretWalls.find(function(sw) { return !sw.revealed && sw.mesh === closest.object; });
                 if (hitSW) {
                     hitSW.hp--;
-                    spawnParticles(wh[0].point, 0xaaaaff, 10, 0.04);
+                    spawnParticles(closest.point, 0xaaaaff, 10, 0.04);
                     if (hitSW.hp <= 0) {
                         hitSW.revealed = true;
                         state.secretFound = true;
@@ -689,57 +690,52 @@ function doShoot() {
                         hitSW.mesh.material.emissiveIntensity = 0.3;
                     }
                 } else {
-                    spawnParticles(wh[0].point, 0xaaaaaa, 8, 0.03);
-                    if (Math.random() > 0.6) spawnPaperParticles(wh[0].point);
+                    spawnParticles(closest.point, 0xaaaaaa, 8, 0.03);
+                    if (Math.random() > 0.6) spawnPaperParticles(closest.point);
                 }
             }
         }
     }
     if (hit) { state.shotsHit++; playSound('hitMarker'); }
-    // Check barrel hits (use pre-built array + map)
+
+    // Center-aim raycast: barrels + props + vending — ONE combined call instead of three
     _shootOrigin.set(0, 0); _shootRC.setFromCamera(_shootOrigin, camera);
-    var bh = _shootRC.intersectObjects(_barrelArr);
-    if (bh.length > 0 && bh[0].distance < 25) {
-        var barrel = _barrelMap.get(bh[0].object);
-        if (barrel) { barrel.hp -= wp.damage; if (barrel.hp <= 0) explodeBarrel(barrel); }
-    }
-
-    // Check prop hits (use pre-built array + map)
-    _shootRC.setFromCamera(_shootOrigin, camera);
-    var ph = _shootRC.intersectObjects(_propArr);
-    if (ph.length > 0 && ph[0].distance < 25) {
-        var prop = _propMap.get(ph[0].object);
-        if (prop) {
-            var dir = new THREE.Vector3().subVectors(prop.mesh.position, camera.position).normalize();
-            prop.velocity.add(dir.multiplyScalar(0.5));
-            prop.rotVelocity.set(Math.random(), Math.random(), Math.random()).multiplyScalar(0.5);
-            spawnParticles(ph[0].point, 0xaaaaaa, 5, 0.02);
-            playSound('binClatter');
-        }
-    }
-
-    // Check vending machine hits (use pre-built array + map)
-    _shootRC.setFromCamera(_shootOrigin, camera);
-    var vh = _shootRC.intersectObjects(_vendArr, true);
-    if (vh.length > 0 && vh[0].distance < 20) {
-        var machine = _vendMap.get(vh[0].object);
-        if (machine && machine.active) {
-            machine.hp -= wp.damage;
-            spawnParticles(vh[0].point, 0x00ffff, 10, 0.03); // Glass/Sparkles
-            playSound('binClatter');
-            if (machine.hp <= 0) {
-                machine.active = false;
-                if (machine.screen) machine.screen.material.emissiveIntensity = 0;
-                machine.screen.material.color.setHex(0x222222);
-                playSound('explosion');
-                // Spawn loot
-                const lootType = Math.random() > 0.5 ? 'health' : 'ammo';
-                const pickupGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
-                const color = lootType === 'health' ? 0x00ff00 : 0xffcc00;
-                const mesh = new THREE.Mesh(pickupGeo, new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.3 }));
-                mesh.position.copy(machine.mesh.position).add(new THREE.Vector3(0, 0.5, 0.5));
-                scene.add(mesh);
-                pickups.push({ mesh, type: lootType, active: true });
+    var _centerTargets = _barrelArr.concat(_propArr, _vendArr);
+    var ch = _shootRC.intersectObjects(_centerTargets, true); // true = recursive for vending children
+    if (ch.length > 0 && ch[0].distance < 25) {
+        var _chObj = ch[0].object;
+        var _barrel = _barrelMap.get(_chObj);
+        if (_barrel) {
+            _barrel.hp -= wp.damage; if (_barrel.hp <= 0) explodeBarrel(_barrel);
+        } else {
+            var _prop = _propMap.get(_chObj);
+            if (_prop) {
+                var dir = new THREE.Vector3().subVectors(_prop.mesh.position, camera.position).normalize();
+                _prop.velocity.add(dir.multiplyScalar(0.5));
+                _prop.rotVelocity.set(Math.random(), Math.random(), Math.random()).multiplyScalar(0.5);
+                spawnParticles(ch[0].point, 0xaaaaaa, 5, 0.02);
+                playSound('binClatter');
+            } else {
+                var _machine = _vendMap.get(_chObj);
+                if (_machine && _machine.active && ch[0].distance < 20) {
+                    _machine.hp -= wp.damage;
+                    spawnParticles(ch[0].point, 0x00ffff, 10, 0.03); // Glass/Sparkles
+                    playSound('binClatter');
+                    if (_machine.hp <= 0) {
+                        _machine.active = false;
+                        if (_machine.screen) _machine.screen.material.emissiveIntensity = 0;
+                        _machine.screen.material.color.setHex(0x222222);
+                        playSound('explosion');
+                        // Spawn loot
+                        const lootType = Math.random() > 0.5 ? 'health' : 'ammo';
+                        const pickupGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+                        const color = lootType === 'health' ? 0x00ff00 : 0xffcc00;
+                        const mesh = new THREE.Mesh(pickupGeo, new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.3 }));
+                        mesh.position.copy(_machine.mesh.position).add(new THREE.Vector3(0, 0.5, 0.5));
+                        scene.add(mesh);
+                        pickups.push({ mesh, type: lootType, active: true });
+                    }
+                }
             }
         }
     }
@@ -852,6 +848,8 @@ var _tmpBox = new THREE.Box3();
 var _eiSorted = [];
 var _enemySortDirty = true;
 var _enemySortTimer = 0;
+// Round-robin offset: rotates which enemies get full AI each frame
+var _aiRoundRobinOffset = 0;
 // Pre-computed nearbyAllies map (avoids O(n²) inner loop in updateEnemy)
 var _nearbyAlliesCache = new Map();
 
@@ -1610,10 +1608,10 @@ function animate() {
         }
     }
 
-    // AI budget: sort by distance, run full AI only on nearest MAX_ACTIVE_AI enemies
+    // AI budget: round-robin — max 8 per frame, rotating which enemies get full AI
     // Skip all AI when player is dead to prevent freeze
     if (!state.dead) {
-        var MAX_ACTIVE_AI = 8;
+        var MAX_AI_PER_FRAME = 8;
         // Re-sort only when enemies die or once per second — avoids .slice().sort() every frame
         _enemySortTimer++;
         if (_enemySortDirty || _enemySortTimer >= 60) {
@@ -1622,29 +1620,39 @@ function animate() {
             });
             _enemySortDirty = false;
             _enemySortTimer = 0;
+            _aiRoundRobinOffset = 0; // Nearest enemies always start a new cycle
         }
-        // Pre-compute nearbyAllies for active AI enemies (avoids O(n²) inside updateEnemy)
-        _nearbyAlliesCache.clear();
-        var _activeCount = Math.min(MAX_ACTIVE_AI, _eiSorted.length);
-        for (var _nai = 0; _nai < _activeCount; _nai++) {
-            var _nae = _eiSorted[_nai];
-            if (_nae.state === 'chase') {
-                var _naCount = 0;
-                for (var _naj = 0; _naj < enemies.length; _naj++) {
-                    if (enemies[_naj] !== _nae && enemies[_naj].state === 'chase' &&
-                        enemies[_naj].mesh.position.distanceTo(_nae.mesh.position) < 6) _naCount++;
+        var _total = _eiSorted.length;
+        if (_total > 0) {
+            // Clamp offset in case enemies died since last frame
+            _aiRoundRobinOffset = _aiRoundRobinOffset % _total;
+            var _activeCount = Math.min(MAX_AI_PER_FRAME, _total);
+            // Pre-compute nearbyAllies only for enemies in the active round-robin slice
+            _nearbyAlliesCache.clear();
+            for (var _nai = 0; _nai < _activeCount; _nai++) {
+                var _nae = _eiSorted[(_aiRoundRobinOffset + _nai) % _total];
+                if (_nae.state === 'chase') {
+                    var _naCount = 0;
+                    for (var _naj = 0; _naj < enemies.length; _naj++) {
+                        if (enemies[_naj] !== _nae && enemies[_naj].state === 'chase' &&
+                            enemies[_naj].mesh.position.distanceTo(_nae.mesh.position) < 6) _naCount++;
+                    }
+                    _nearbyAlliesCache.set(_nae, _naCount);
                 }
-                _nearbyAlliesCache.set(_nae, _naCount);
             }
-        }
-        for (var _ei = 0; _ei < _eiSorted.length; _ei++) {
-            var _e = _eiSorted[_ei];
-            if (_ei < MAX_ACTIVE_AI) {
-                updateEnemy(_e, dt, time);
-            } else {
-                _eLook.set(camera.position.x, _e.mesh.position.y, camera.position.z);
-                _e.mesh.lookAt(_eLook);
+            for (var _ei = 0; _ei < _total; _ei++) {
+                var _e = _eiSorted[_ei];
+                // Determine if this enemy falls in the active round-robin window
+                var _relIdx = (_ei - _aiRoundRobinOffset + _total) % _total;
+                if (_relIdx < _activeCount) {
+                    updateEnemy(_e, dt, time);
+                } else {
+                    _eLook.set(camera.position.x, _e.mesh.position.y, camera.position.z);
+                    _e.mesh.lookAt(_eLook);
+                }
             }
+            // Advance offset for next frame — rotates through all enemies over time
+            _aiRoundRobinOffset = (_aiRoundRobinOffset + _activeCount) % _total;
         }
     }
     updateDamageIndicator(dt);
