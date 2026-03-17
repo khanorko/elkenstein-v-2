@@ -46,7 +46,7 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.0));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.BasicShadowMap;
 document.body.appendChild(renderer.domElement);
@@ -61,7 +61,7 @@ composer.addPass(renderScene); composer.addPass(bloomPass);
 // Bloom is expensive — off by default on Safari
 var _isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 var _qualityLevels = ['LOW', 'MED', 'HIGH'];
-var _quality = _isSafari ? 0 : 2;
+var _quality = 0; // Bloom off by default for all platforms — user enables via quality selector
 function applyQuality(q) {
     _quality = q;
     bloomPass.enabled = (q >= 2);  // Bloom only on HIGH
@@ -608,6 +608,31 @@ function doShoot() {
         _emArr[_emi] = enemies[_emi].mesh;
         _emMap.set(enemies[_emi].mesh, enemies[_emi]);
     }
+    // Build all mesh arrays + Maps once per shot (not per pellet) — avoids repeated filter/map/find
+    var _secretMeshes = [];
+    for (var _smi = 0; _smi < secretWalls.length; _smi++) {
+        if (!secretWalls[_smi].revealed) _secretMeshes.push(secretWalls[_smi].mesh);
+    }
+    var _wallHitMeshes = walls.concat(_secretMeshes);
+    for (var _dmi = 0; _dmi < doors.length; _dmi++) _wallHitMeshes.push(doors[_dmi].mesh);
+    // Barrel meshes + map
+    var _barrelArr = []; var _barrelMap = new Map();
+    for (var _bi = 0; _bi < barrels.length; _bi++) {
+        if (barrels[_bi].active) { _barrelArr.push(barrels[_bi].mesh); _barrelMap.set(barrels[_bi].mesh, barrels[_bi]); }
+    }
+    // Prop meshes + map
+    var _propArr = []; var _propMap = new Map();
+    for (var _pi2 = 0; _pi2 < props.length; _pi2++) { _propArr.push(props[_pi2].mesh); _propMap.set(props[_pi2].mesh, props[_pi2]); }
+    // Vending machine meshes + map (including children)
+    var _vendArr = []; var _vendMap = new Map();
+    for (var _vi = 0; _vi < vendingMachines.length; _vi++) {
+        if (vendingMachines[_vi].active) {
+            _vendArr.push(vendingMachines[_vi].mesh);
+            _vendMap.set(vendingMachines[_vi].mesh, vendingMachines[_vi]);
+            vendingMachines[_vi].mesh.children.forEach(function(c) { _vendMap.set(c, vendingMachines[_vi]); });
+        }
+    }
+
     var pellets = wp.pellets || 1; var hit = false;
     for (var p = 0; p < pellets; p++) {
         var extraSpread = state.ammoType === 1 ? 0.04 : 0; // Hålspets has more spread
@@ -640,13 +665,13 @@ function doShoot() {
                     spawnParticles(en.mesh.position, 0xffff00, 30, 0.1); playSound('enemyDie');
                     spawnRagdoll(en.mesh);
                     scene.remove(en.mesh); enemies.splice(enemies.indexOf(en), 1); state.kills++; state.levelKills++;
+                    _enemySortDirty = true; // Re-sort next frame after enemy count changes
                     addCombo();
                     addKillFeed(en.type.toUpperCase().replace('_', ' ') + ' eliminerad');
                 }
             }
         } else {
-            var secretMeshes = secretWalls.filter(function(sw) { return !sw.revealed; }).map(function(sw) { return sw.mesh; });
-            var wh = _shootRC.intersectObjects(walls.concat(doors.map(function(d) { return d.mesh; })).concat(secretMeshes));
+            var wh = _shootRC.intersectObjects(_wallHitMeshes);
             if (wh.length > 0 && wh[0].distance < 30) {
                 // Check if hit a secret wall
                 var hitSW = secretWalls.find(function(sw) { return !sw.revealed && sw.mesh === wh[0].object; });
@@ -671,19 +696,19 @@ function doShoot() {
         }
     }
     if (hit) { state.shotsHit++; playSound('hitMarker'); }
-    // Check barrel hits
+    // Check barrel hits (use pre-built array + map)
     _shootOrigin.set(0, 0); _shootRC.setFromCamera(_shootOrigin, camera);
-    var bh = _shootRC.intersectObjects(barrels.filter(function(b) { return b.active; }).map(function(b) { return b.mesh; }));
+    var bh = _shootRC.intersectObjects(_barrelArr);
     if (bh.length > 0 && bh[0].distance < 25) {
-        var barrel = barrels.find(function(b) { return b.mesh === bh[0].object; });
+        var barrel = _barrelMap.get(bh[0].object);
         if (barrel) { barrel.hp -= wp.damage; if (barrel.hp <= 0) explodeBarrel(barrel); }
     }
-    
-    // Check prop hits
+
+    // Check prop hits (use pre-built array + map)
     _shootRC.setFromCamera(_shootOrigin, camera);
-    var ph = _shootRC.intersectObjects(props.map(function(p) { return p.mesh; }));
+    var ph = _shootRC.intersectObjects(_propArr);
     if (ph.length > 0 && ph[0].distance < 25) {
-        var prop = props.find(function(p) { return p.mesh === ph[0].object; });
+        var prop = _propMap.get(ph[0].object);
         if (prop) {
             var dir = new THREE.Vector3().subVectors(prop.mesh.position, camera.position).normalize();
             prop.velocity.add(dir.multiplyScalar(0.5));
@@ -693,11 +718,11 @@ function doShoot() {
         }
     }
 
-    // Check vending machine hits
+    // Check vending machine hits (use pre-built array + map)
     _shootRC.setFromCamera(_shootOrigin, camera);
-    var vh = _shootRC.intersectObjects(vendingMachines.filter(function(v) { return v.active; }).map(function(v) { return v.mesh; }), true);
+    var vh = _shootRC.intersectObjects(_vendArr, true);
     if (vh.length > 0 && vh[0].distance < 20) {
-        var machine = vendingMachines.find(function(v) { return v.mesh === vh[0].object || v.mesh.children.includes(vh[0].object); });
+        var machine = _vendMap.get(vh[0].object);
         if (machine && machine.active) {
             machine.hp -= wp.damage;
             spawnParticles(vh[0].point, 0x00ffff, 10, 0.03); // Glass/Sparkles
@@ -823,8 +848,19 @@ var _playerBox = new THREE.Box3();
 var _boxSize = new THREE.Vector3();
 var _tmpBox = new THREE.Box3();
 
+// Enemy sort cache — re-sort only on kill or every 60 frames
+var _eiSorted = [];
+var _enemySortDirty = true;
+var _enemySortTimer = 0;
+// Pre-computed nearbyAllies map (avoids O(n²) inner loop in updateEnemy)
+var _nearbyAlliesCache = new Map();
+
 function rebuildCollisionCache() {
     wallBoxes = walls.map(function(w) { return new THREE.Box3().setFromObject(w); });
+    // Cache door and secret wall boxes — avoids per-frame setFromObject in hot path
+    doors.forEach(function(d) { d._box3 = new THREE.Box3().setFromObject(d.mesh); });
+    secretWalls.forEach(function(sw) { sw._box3 = new THREE.Box3().setFromObject(sw.mesh); });
+    _enemySortDirty = true;
 }
 
 function checkCollision(pos, radius) {
@@ -834,18 +870,16 @@ function checkCollision(pos, radius) {
     for (var i = 0; i < wallBoxes.length; i++) {
         if (wallBoxes[i].intersectsBox(_playerBox)) return true;
     }
-    // Check closed doors (few, so ok to compute live)
+    // Check closed doors — use cached box3 (updated during animation)
     for (var j = 0; j < doors.length; j++) {
-        if (!doors[j].open) {
-            _tmpBox.setFromObject(doors[j].mesh);
-            if (_tmpBox.intersectsBox(_playerBox)) return true;
+        if (!doors[j].open && doors[j]._box3) {
+            if (doors[j]._box3.intersectsBox(_playerBox)) return true;
         }
     }
-    // Check unrevealed secret walls
+    // Check unrevealed secret walls — use cached box3
     for (var k = 0; k < secretWalls.length; k++) {
-        if (!secretWalls[k].revealed) {
-            _tmpBox.setFromObject(secretWalls[k].mesh);
-            if (_tmpBox.intersectsBox(_playerBox)) return true;
+        if (!secretWalls[k].revealed && secretWalls[k]._box3) {
+            if (secretWalls[k]._box3.intersectsBox(_playerBox)) return true;
         }
     }
     return false;
@@ -999,11 +1033,8 @@ function updateEnemy(e, dt, time) {
     }
 
     if (e.state === 'chase' && dist > 1.2) {
-        // AI coordination: count nearby chasing allies
-        var nearbyAllies = 0;
-        for (var k = 0; k < enemies.length; k++) {
-            if (enemies[k] !== e && enemies[k].state === 'chase' && enemies[k].mesh.position.distanceTo(e.mesh.position) < 6) nearbyAllies++;
-        }
+        // Use pre-computed nearbyAllies (avoids O(n²) inner loop — computed once per frame before AI updates)
+        var nearbyAllies = _nearbyAlliesCache.get(e) || 0;
         var _speedMult = state.modifiers.fastEnemies ? 1.8 : 1;
         var coordSpeed = (nearbyAllies > 0 && Math.sin(time + e.patrolOriginX * 3) > 0.3 ? 2.0 : 3.5) * _speedMult;
 
@@ -1391,7 +1422,12 @@ function animate() {
         }
     }
 
-    doors.forEach(function(d) { d.mesh.position.y = Math.lerp(d.mesh.position.y, d.open ? 6 : 2, 5 * dt); });
+    doors.forEach(function(d) {
+        var prevY = d.mesh.position.y;
+        d.mesh.position.y = Math.lerp(d.mesh.position.y, d.open ? 6 : 2, 5 * dt);
+        // Keep cached box in sync while door is moving (cheap: only when position changes significantly)
+        if (Math.abs(d.mesh.position.y - prevY) > 0.01 && d._box3) d._box3.setFromObject(d.mesh);
+    });
 
     // ── Secret walls: slide open when revealed ────────────────────────────────
     secretWalls.forEach(function(sw) {
@@ -1577,10 +1613,30 @@ function animate() {
     // AI budget: sort by distance, run full AI only on nearest MAX_ACTIVE_AI enemies
     // Skip all AI when player is dead to prevent freeze
     if (!state.dead) {
-        var MAX_ACTIVE_AI = 6;
-        var _eiSorted = enemies.slice().sort(function(a, b) {
-            return a.mesh.position.distanceTo(camera.position) - b.mesh.position.distanceTo(camera.position);
-        });
+        var MAX_ACTIVE_AI = 8;
+        // Re-sort only when enemies die or once per second — avoids .slice().sort() every frame
+        _enemySortTimer++;
+        if (_enemySortDirty || _enemySortTimer >= 60) {
+            _eiSorted = enemies.slice().sort(function(a, b) {
+                return a.mesh.position.distanceTo(camera.position) - b.mesh.position.distanceTo(camera.position);
+            });
+            _enemySortDirty = false;
+            _enemySortTimer = 0;
+        }
+        // Pre-compute nearbyAllies for active AI enemies (avoids O(n²) inside updateEnemy)
+        _nearbyAlliesCache.clear();
+        var _activeCount = Math.min(MAX_ACTIVE_AI, _eiSorted.length);
+        for (var _nai = 0; _nai < _activeCount; _nai++) {
+            var _nae = _eiSorted[_nai];
+            if (_nae.state === 'chase') {
+                var _naCount = 0;
+                for (var _naj = 0; _naj < enemies.length; _naj++) {
+                    if (enemies[_naj] !== _nae && enemies[_naj].state === 'chase' &&
+                        enemies[_naj].mesh.position.distanceTo(_nae.mesh.position) < 6) _naCount++;
+                }
+                _nearbyAlliesCache.set(_nae, _naCount);
+            }
+        }
         for (var _ei = 0; _ei < _eiSorted.length; _ei++) {
             var _e = _eiSorted[_ei];
             if (_ei < MAX_ACTIVE_AI) {
