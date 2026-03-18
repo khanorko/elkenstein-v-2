@@ -1659,7 +1659,12 @@ function animate() {
     updateArcadeMode();
 
     updateUI();
-    composer.render();
+    // Skip EffectComposer overhead when bloom is off — direct render is cheaper
+    if (_quality >= 2) {
+        composer.render();
+    } else {
+        renderer.render(scene, camera);
+    }
 }
 
 window._cycleQuality = function() { applyQuality((_quality + 1) % 3); };
